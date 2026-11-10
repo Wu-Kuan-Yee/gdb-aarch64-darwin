@@ -21,6 +21,7 @@ IDENTITY=
 DO_SIGN=1
 DO_VERIFY=1
 DO_PYTHON=1
+PORTABLE=0
 RECONFIGURE=0
 CLEAN=0
 DISTCLEAN=0
@@ -53,6 +54,8 @@ Options:
                      the patches
   --identity NAME    Codesigning identity (default: first Apple Development)
   --no-python        Configure without Python scripting support
+  --portable         Link GMP and MPFR statically and disable Python, so the
+                     installed GDB depends only on macOS system libraries
   --build-dir DIR    Build directory (default: ${BUILD_DIR})
   --clean            Remove the build directory before configuring
   --distclean        Also remove the cached source and installed tree
@@ -130,6 +133,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--no-python)
 			DO_PYTHON=0
+			shift
+			;;
+		--portable)
+			PORTABLE=1
 			shift
 			;;
 		--no-verify)
@@ -219,10 +226,13 @@ find_python()
 config_is_current()
 {
 	local config="${BUILD_DIR}/config.status" args prefix_real source_real
+	local gmp_real mpfr_real
 	[ -f "${config}" ] || return 1
 	args=$(cd -- "${BUILD_DIR}" && sh ./config.status --config 2>/dev/null) || return 1
 	prefix_real=$(cd -- "${PREFIX}" 2>/dev/null && pwd -P) || prefix_real=${PREFIX}
 	source_real=$(cd -- "${SOURCE_DIR}" 2>/dev/null && pwd -P) || source_real=${SOURCE_DIR}
+	gmp_real=$(cd -- "${GMP_PREFIX}" 2>/dev/null && pwd -P) || gmp_real=${GMP_PREFIX}
+	mpfr_real=$(cd -- "${MPFR_PREFIX}" 2>/dev/null && pwd -P) || mpfr_real=${MPFR_PREFIX}
 	printf '%s' "${args}" | grep -Fq -- "--prefix=${prefix_real}" || return 1
 	printf '%s' "${args}" | grep -Fq -- "--srcdir=${source_real}" || return 1
 	if [ -n "${PYTHON_BIN}" ]; then
@@ -230,6 +240,8 @@ config_is_current()
 	else
 		printf '%s' "${args}" | grep -Fq -- "--with-python=" && return 1
 	fi
+	printf '%s' "${args}" | grep -Fq -- "--with-gmp=${gmp_real}" || return 1
+	printf '%s' "${args}" | grep -Fq -- "--with-mpfr=${mpfr_real}" || return 1
 	return 0
 }
 
@@ -262,8 +274,17 @@ require_cmd shasum
 SDK=$(sdk_path)
 [ -n "${SDK}" ] && [ -d "${SDK}" ] || die "cannot find the macOS SDK; run xcode-select --install"
 
-GMP_PREFIX=$(find_gmp_prefix)
-MPFR_PREFIX=$(find_mpfr_prefix)
+if [ "${PORTABLE}" -eq 1 ]; then
+	step "preparing static GMP and MPFR"
+	"${SCRIPT_DIR}/scripts/build-deps.sh" --prefix "${GAD_CACHE_DIR}/deps" ||
+		die "cannot prepare the static libraries"
+	GMP_PREFIX="${GAD_CACHE_DIR}/deps/gmp"
+	MPFR_PREFIX="${GAD_CACHE_DIR}/deps/mpfr"
+	DO_PYTHON=0
+else
+	GMP_PREFIX=$(find_gmp_prefix)
+	MPFR_PREFIX=$(find_mpfr_prefix)
+fi
 library_prefix_ok "${GMP_PREFIX}" gmp.h libgmp ||
 	die "GMP not found; install it with: brew install gmp (or set GAD_GMP_PREFIX)"
 library_prefix_ok "${MPFR_PREFIX}" mpfr.h libmpfr ||
@@ -306,6 +327,9 @@ else
 	info "python:     none with development headers (scripting disabled)"
 fi
 info "jobs:       ${JOBS}"
+if [ "${PORTABLE}" -eq 1 ]; then
+	info "portable:   static GMP/MPFR, no Python"
+fi
 if [ "${DO_SIGN}" -eq 1 ]; then
 	info "identity:   ${IDENTITY}"
 fi
@@ -425,6 +449,19 @@ if [ "${GAD_DRY_RUN}" -eq 0 ]; then
 	[ -d "${PREFIX}/share/gdb" ] || warn "runtime data directory is missing: ${PREFIX}/share/gdb"
 fi
 ok "installed ${INSTALLED_GDB}"
+
+if [ "${PORTABLE}" -eq 1 ] && [ "${GAD_DRY_RUN}" -eq 0 ]; then
+	non_system=$(otool -L "${INSTALLED_GDB}" |
+		tail -n +2 |
+		awk '{ print $1 }' |
+		grep -Ev '^(/usr/lib/|/System/|/Library/Apple/)' || true)
+	if [ -n "${non_system}" ]; then
+		error "the portable build still links against non-system libraries:"
+		printf '%s\n' "${non_system}" >&2
+		exit 1
+	fi
+	ok "portable: only macOS system libraries"
+fi
 
 if [ "${DO_SIGN}" -eq 1 ]; then
 	step "signing GDB"
