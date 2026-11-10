@@ -1,0 +1,165 @@
+diff --git a/gdb/solib-darwin.c b/gdb/solib-darwin.c
+--- a/gdb/solib-darwin.c
++++ b/gdb/solib-darwin.c
+@@ -81,7 +81,7 @@
+ 
+ /* Current all_image_infos version.  */
+ #define DYLD_VERSION_MIN 1
+-#define DYLD_VERSION_MAX 15
++#define DYLD_VERSION_MAX 17
+ 
+ /* Per PSPACE specific data.  */
+ struct darwin_info
+@@ -111,8 +111,9 @@
+ static int
+ darwin_dyld_version_ok (const struct darwin_info *info)
+ {
+-  return info->all_image.version >= DYLD_VERSION_MIN
+-    && info->all_image.version <= DYLD_VERSION_MAX;
++  /* dyld_all_image_infos is append-only, and only the first four fields
++     below are read, so a newer version is still usable.  */
++  return info->all_image.version >= DYLD_VERSION_MIN;
+ }
+ 
+ /* Read dyld_all_image from inferior.  */
+@@ -269,6 +270,12 @@
+       if (file_path == nullptr)
+ 	break;
+ 
++      /* Libraries that live only in the dyld shared cache have no file on
++	 disk: GDB cannot read their symbols, and trying to open one would
++	 report an error for every library in the process.  Skip them.  */
++      if (access (file_path.get (), R_OK) != 0)
++	continue;
++
+       /* Create and fill the new struct solib element.  */
+       sos.emplace_back (std::make_unique<lm_info_darwin> (load_addr),
+ 			file_path.get (), file_path.get (), *this);
+@@ -498,6 +505,11 @@
+       return;
+     }
+ 
++  if (info->all_image.version > DYLD_VERSION_MAX)
++    warning (_("dyld version %d is newer than the known maximum %d; "
++	       "shared library support may be incomplete"),
++	     info->all_image.version, DYLD_VERSION_MAX);
++
+   if (info->all_image.count != 0)
+     {
+       /* Possible relocate the main executable (PIE).  */
+@@ -566,12 +578,45 @@
+     }
+ 
+   /* Add the breakpoint which is hit by dyld when the list of solib is
+-     modified.  */
+-  if (notifier != 0)
++     modified.  When dyld has not published its image list yet the notifier
++     field is not meaningful; the breakpoint is installed later, from
++     darwin_solib_install_notifier, once the list is available.  */
++  if (notifier != 0 && info->all_image.count != 0)
+     create_solib_event_breakpoint (current_inferior ()->arch (), notifier);
+ }
+ 
++/* See solib-darwin.h.  */
++
++bool
++darwin_solib_refresh ()
++{
++  if (!target_has_execution ())
++    return false;
++
++  darwin_info *info = get_darwin_info (current_program_space);
++
++  info->all_image_addr = 0;
++  darwin_solib_read_all_image_info_addr (info);
++  if (info->all_image_addr == 0)
++    return false;
++
++  darwin_load_image_infos (info);
++  return info->all_image.count != 0;
++}
++
++/* See solib-darwin.h.  */
++
+ void
++darwin_solib_install_notifier ()
++{
++  darwin_info *info = get_darwin_info (current_program_space);
++
++  if (info->all_image.notifier != 0)
++    create_solib_event_breakpoint (current_inferior ()->arch (),
++				   info->all_image.notifier);
++}
++
++void
+ darwin_solib_ops::clear_solib (program_space *pspace) const
+ {
+   darwin_info *info = get_darwin_info (pspace);
+diff --git a/gdb/solib-darwin.h b/gdb/solib-darwin.h
+--- a/gdb/solib-darwin.h
++++ b/gdb/solib-darwin.h
+@@ -26,4 +26,13 @@
+ 
+ extern solib_ops_up make_darwin_solib_ops (program_space *pspace);
+ 
++/* Re-read dyld_all_image_infos.  Return true when dyld has published its
++   image list, which does not happen at the initial exec stop.  */
++
++extern bool darwin_solib_refresh ();
++
++/* Install the dyld notifier breakpoint from the most recent refresh.  */
++
++extern void darwin_solib_install_notifier ();
++
+ #endif /* GDB_SOLIB_DARWIN_H */
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -63,6 +63,7 @@
+ #include <mach/port.h>
+ 
+ #include "darwin-nat.h"
++#include "solib-darwin.h"
+ #include "filenames.h"
+ #include "gdbsupport/filestuff.h"
+ #include "gdbsupport/gdb_unlinker.h"
+@@ -1331,7 +1332,25 @@
+ darwin_nat_target::wait (ptid_t ptid, struct target_waitstatus *status,
+ 			 target_wait_flags options)
+ {
+-  return wait_1 (ptid, status);
++  struct inferior *inf = current_inferior ();
++  darwin_inferior *priv = get_darwin_inferior (inf);
++
++  ptid_t res = wait_1 (ptid, status);
++
++  /* At the initial exec stop dyld has not built its image list yet, so the
++     solib hook runs before any library is visible.  Once a later stop
++     arrives, dyld is up: load the libraries now, while the inferior is
++     stopped, and install the notifier that reports later loads.  */
++  if (!priv->solib_events_reported
++      && status->kind () == TARGET_WAITKIND_STOPPED
++      && darwin_solib_refresh ())
++    {
++      priv->solib_events_reported = true;
++      darwin_solib_install_notifier ();
++      solib_add (nullptr, 0, 1);
++    }
++
++  return res;
+ }
+ 
+ void
+diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
+--- a/gdb/darwin-nat.h
++++ b/gdb/darwin-nat.h
+@@ -185,6 +185,9 @@
+ 
+   /* Sorted vector of known threads.  */
+   std::vector<darwin_thread_t *> threads;
++
++  /* True once the dyld image list has been reported to GDB.  */
++  bool solib_events_reported = false;
+ };
+ 
+ /* Return the darwin_inferior attached to INF.  */

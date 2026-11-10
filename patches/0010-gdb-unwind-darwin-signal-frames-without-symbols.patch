@@ -1,0 +1,120 @@
+diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
+--- a/gdb/aarch64-darwin-tdep.c
++++ b/gdb/aarch64-darwin-tdep.c
+@@ -18,6 +18,8 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ 
+ #include "gdbarch.h"
++#include "inferior.h"
++#include "objfiles.h"
+ #include "extract-store-integer.h"
+ #include "frame.h"
+ #include "arch/aarch64.h"
+@@ -145,7 +147,54 @@
+   trad_frame_set_id (cache, frame_id_build (sp, func));
+ }
+ 
++/* Return true when ADDR looks like the Darwin ucontext_t that the kernel
++   builds for a signal handler: the mcontext pointer has to be readable and
++   the saved stack pointer and program counter have to be plausible.  */
++
+ static int
++aarch64_darwin_ucontext_p (CORE_ADDR ucontext)
++{
++  struct gdbarch *gdbarch = current_inferior ()->arch ();
++  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
++  gdb_byte buf[8];
++  CORE_ADDR mcontext;
++  CORE_ADDR thread_state;
++  CORE_ADDR sp;
++  CORE_ADDR pc;
++
++  if (ucontext == 0)
++    return 0;
++
++  if (target_read_memory
++      (ucontext + offsetof (DARWIN_UCONTEXT64_TYPE, uc_mcontext64),
++       buf, sizeof buf))
++    return 0;
++
++  mcontext = extract_unsigned_integer (buf, sizeof buf, byte_order);
++  if (mcontext == 0)
++    return 0;
++
++  thread_state = mcontext + offsetof (_STRUCT_MCONTEXT64,
++				      DARWIN_ARM64_MCONTEXT_SS_MEMBER);
++
++  if (target_read_memory
++      (thread_state + offsetof (arm_thread_state64_t,
++				DARWIN_ARM64_THREAD_SP_MEMBER),
++       buf, sizeof buf))
++    return 0;
++  sp = extract_unsigned_integer (buf, sizeof buf, byte_order);
++
++  if (target_read_memory
++      (thread_state + offsetof (arm_thread_state64_t,
++				DARWIN_ARM64_THREAD_PC_MEMBER),
++       buf, sizeof buf))
++    return 0;
++  pc = extract_unsigned_integer (buf, sizeof buf, byte_order);
++
++  return sp != 0 && (sp & 0xf) == 0 && pc != 0;
++}
++
++static int
+ aarch64_darwin_sigtramp_validate (const struct tramp_frame *self,
+ 				  const frame_info_ptr &this_frame,
+ 				  CORE_ADDR *pc)
+@@ -153,14 +202,45 @@
+   const char *name = nullptr;
+   CORE_ADDR start = 0;
+ 
+-  if (!find_pc_partial_function (*pc, &name, &start, nullptr)
+-      || name == nullptr
+-      || (strcmp (name, "_sigtramp") != 0
+-		  && strcmp (name, "__sigtramp") != 0))
+-    return 0;
++  if (find_pc_partial_function (*pc, &name, &start, nullptr)
++      && name != nullptr
++      && (strcmp (name, "_sigtramp") == 0
++	  || strcmp (name, "__sigtramp") == 0))
++    {
++      *pc = start;
++      return 1;
++    }
+ 
+-  *pc = start;
+-  return 1;
++  /* Modern macOS keeps the system libraries in the dyld shared cache, so the
++     return address of a signal handler has no name to check.  The kernel
++     leaves the ucontext pointer in x20, which is callee-saved and therefore
++     still available here.  */
++  {
++    CORE_ADDR ucontext;
++    struct obj_section *pc_section;
++
++    /* The handler itself is a normal frame; only a return address can name
++       the trampoline.  */
++    if (frame_relative_level (this_frame) == 0)
++      return 0;
++
++    ucontext = get_frame_register_unsigned (this_frame,
++					    AARCH64_X0_REGNUM + 20);
++    if (!aarch64_darwin_ucontext_p (ucontext))
++      return 0;
++
++    /* The trampoline lives in a system library, not in the program being
++       debugged; reject a return address that stays inside it.  */
++    pc_section = find_pc_section (*pc);
++    if (pc_section != nullptr && current_program_space->symfile_object_file
++	!= nullptr
++	&& pc_section->objfile == current_program_space->symfile_object_file)
++      return 0;
++
++    return 1;
++  }
++
++  return 0;
+ }
+ 
+ static const struct tramp_frame aarch64_darwin_sigframe =

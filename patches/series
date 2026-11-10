@@ -5,3 +5,6 @@
 0005-gdb-sign-darwin-debugger-with-entitlements.patch
 0006-gdb-fix-aarch64-darwin-hardware-watchpoints.patch
 0007-gdb-ignore-thread-dead-name-notifications.patch
+0008-gdb-load-darwin-shared-libraries-on-current-macos.patch
+0009-gdb-handle-implicit-const-object-pointers.patch
+0010-gdb-unwind-darwin-signal-frames-without-symbols.patch

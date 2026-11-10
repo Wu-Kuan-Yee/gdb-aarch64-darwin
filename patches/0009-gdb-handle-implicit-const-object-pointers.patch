@@ -1,0 +1,36 @@
+diff --git a/gdb/dwarf2/read.c b/gdb/dwarf2/read.c
+--- a/gdb/dwarf2/read.c
++++ b/gdb/dwarf2/read.c
+@@ -4632,7 +4632,9 @@
+ const dwarf2_section_info &
+ get_section_for_ref (const attribute &attr, dwarf2_cu *cu)
+ {
+-  gdb_assert (attr.form_is_ref ());
++  if (!attr.form_is_ref ())
++    error (_("DWARF attribute %s has non-reference form %s"),
++	   dwarf_attr_name (attr.name), dwarf_form_name (attr.form));
+ 
+   if (attr.form_is_alt ())
+     return cu->per_cu->per_bfd ()->get_dwz_file (true)->info;
+@@ -12520,10 +12522,20 @@
+ 		  const char *name = dwarf2_name (child_die, cu);
+ 
+ 		  attr = dwarf2_attr (die, DW_AT_object_pointer, cu);
+-		  if (attr != nullptr)
++		  if (attr != nullptr && attr->form_is_ref ())
+ 		    {
+ 		      /* If the compiler emits this, use it.  */
+ 		      if (follow_die_ref (die, attr, &arg_cu) == child_die)
++			is_this = 1;
++		    }
++		  else if (attr != nullptr)
++		    {
++		      /* Some compilers describe the object pointer with an
++			 implicit constant instead of a reference, which is
++			 what Clang does for declarations that have no DIE for
++			 the artificial parameter.  In that case the object
++			 pointer is the first parameter.  */
++		      if (iparams == 0)
+ 			is_this = 1;
+ 		    }
+ 		  else if (name && streq (name, "this"))

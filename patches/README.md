@@ -14,6 +14,9 @@ revision and are applied in the order listed in `series` with
 | `0005` | `gdb/Makefile.in`, `gdb/darwin-nat.c` | Sign the debugger with `com.apple.security.cs.debugger` at build time |
 | `0006` | `gdb/aarch64-darwin-nat.c`, `gdb/aarch64-nat.c` | Program the four ARM64 hardware watchpoint slots and report the faulting address |
 | `0007` | `gdb/darwin-nat.c` | Do not block reaping a child when a thread port dies while the inferior is still running |
+| `0008` | `gdb/solib-darwin.c`, `gdb/darwin-nat.c` | Load the dyld image list once dyld publishes it, accept current dyld versions, and skip libraries that only exist in the shared cache |
+| `0009` | `gdb/dwarf2/read.c` | Handle `DW_AT_object_pointer` with `DW_FORM_implicit_const`, as emitted by current Clang |
+| `0010` | `gdb/aarch64-darwin-tdep.c` | Recognise Darwin signal frames through the ucontext pointer when the system libraries have no symbols |
 
 ## Keeping the series current
 

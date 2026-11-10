@@ -88,7 +88,7 @@ signed with `get-task-allow`:
 ## How the build works
 
 ```text
-patches/             the AArch64 Darwin backend, seven ordered diffs
+patches/             the AArch64 Darwin backend, ten ordered diffs
 scripts/bootstrap.sh clone upstream once, check out the pinned revision,
                      apply the patch series
 build.sh             bootstrap, configure, make, install, sign, verify
