@@ -156,6 +156,23 @@ The series targets the revision in `scripts/lib/common.sh`
 (`UPSTREAM_REV`).  To move it forward, rebase the patches onto the new
 upstream revision and rebuild; `patches/README.md` describes the procedure.
 
+To build whatever upstream master contains right now, without changing the
+pin:
+
+```sh
+./build.sh --latest
+```
+
+This fetches `origin/master`, applies the series with a three-way merge and
+builds the result.  Ordinary drift, such as code moving or a neighbouring
+comment being renamed, is absorbed automatically.  If upstream changes the
+exact lines a patch modifies, the build stops, lists the conflicting files
+and resets the cached tree, so a half-patched tree is never compiled.
+
+`--latest` trades reproducibility for currency: the pinned revision and the
+patch files are left alone.  When a `--latest` build looks good, move the
+pin deliberately as described in `patches/README.md`.
+
 ## Limitations
 
 - The backend talks to the kernel through the Mach exception and thread

@@ -68,6 +68,7 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 | `--identity NAME` | Codesigning identity to use |
 | `--no-python` | Configure without Python scripting support |
 | `--portable` | Static GMP/MPFR, no Python: only macOS system libraries |
+| `--latest` | Build upstream master instead of the pinned revision |
 | `--build-dir DIR` | Build directory, default `./build` |
 | `--clean` | Remove `build/` before configuring |
 | `--distclean` | Also remove `dist/` and `.cache/` |
@@ -94,6 +95,10 @@ macOS ships.  Two things change:
   staged under `.cache/deps`, outside the installation prefix.
 - Python is disabled, because linking a Homebrew Python framework would put
   a third-party dylib back into the binary.
+- The other optional dependencies GDB can pick up (Guile, zstd, lzma,
+  debuginfod) are disabled as well, and `pkg-config` is pointed at the system
+  directory so that a Homebrew installation cannot leak in through its
+  default search path.
 
 After installation the build inspects `otool -L` and fails if anything
 outside `/usr/lib`, `/System` or `/Library/Apple` is referenced.  Use this
@@ -210,6 +215,29 @@ first; see [SIGNING.md](SIGNING.md).
 
 `--no-sign` exists so the build can be exercised without a certificate, but
 such a GDB cannot start an inferior.
+
+## Building the current upstream master
+
+```sh
+./build.sh --latest
+```
+
+The cached clone is fetched, `origin/master` becomes the revision, and the
+patch series is applied with `git apply --3way`.  The three-way merge uses
+the blob ids recorded in the patches, so upstream edits that move the code
+around are merged rather than rejected.  A hunk that conflicts with a real
+upstream change is not forced in: the build prints the conflicting paths,
+resets the cached tree and exits non-zero.
+
+This mode is deliberately not the default.  It builds whatever master
+happens to be at that moment, so two runs on different days can produce
+different debuggers.  The pinned revision, the patch files and the
+documentation are not modified.  Promote a successful latest build by
+rebasing the series and updating `UPSTREAM_REV`, as described in
+`patches/README.md`.
+
+`--latest` cannot be combined with `--source`; an external checkout has no
+upstream to follow.
 
 ## Updating the pinned revision
 

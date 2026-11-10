@@ -20,6 +20,8 @@ REV=${UPSTREAM_REV}
 REFRESH=0
 OFFLINE=0
 CLEAN=0
+LATEST=0
+THREE_WAY=0
 
 usage()
 {
@@ -43,6 +45,9 @@ Options:
                  the backend is left untouched.
   --rev REV      Upstream revision to check out (default: pinned revision)
   --cache DIR    Directory for the cached clone (default: ${GAD_CACHE_DIR})
+  --latest       Build the current upstream master instead of the pinned
+                 revision.  Patches are applied with a three-way merge so
+                 that ordinary upstream drift is absorbed automatically.
   --refresh      Fetch new upstream objects before checking out
   --offline      Do not touch the network; fail if the revision is not cached
   --clean        Remove the cached checkout before preparing the tree
@@ -77,6 +82,11 @@ while [ "$#" -gt 0 ]; do
 			GAD_SOURCE_DIR="${GAD_CACHE_DIR}/binutils-gdb"
 			shift 2
 			;;
+		--latest)
+			LATEST=1
+			THREE_WAY=1
+			shift
+			;;
 		--refresh)
 			REFRESH=1
 			shift
@@ -104,6 +114,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$#" -eq 0 ] || die "unexpected argument: $1"
+
+if [ "${LATEST}" -eq 1 ] && [ -n "${SOURCE_OPT}" ]; then
+	die "--latest and --source cannot be combined"
+fi
 
 series_digest()
 {
@@ -134,13 +148,14 @@ write_stamp()
 	} >"${dir}/.gdb-aarch64-darwin"
 }
 
-# apply_series DIR: apply every patch in patches/series to DIR.
+# apply_series DIR: apply every patch in patches/series to DIR.  Returns
+# non-zero on failure and leaves the decision about cleaning up to the caller.
 apply_series()
 {
 	local dir=$1 name patch
-	local use_git=0
+	local use_git=0 conflicts
 
-	if [ -d "${dir}/.git" ]; then
+	if git -C "${dir}" rev-parse --git-dir >/dev/null 2>&1; then
 		use_git=1
 	fi
 
@@ -150,16 +165,31 @@ apply_series()
 		[ -f "${patch}" ] || die "patch listed in series is missing: ${patch}"
 		step "applying ${name}"
 		if [ "${use_git}" -eq 1 ]; then
-			git -C "${dir}" apply --check "${patch}" ||
-				die "${name} does not apply; the tree is probably not at ${REV}"
-			run git -C "${dir}" apply --whitespace=nowarn "${patch}"
+			if [ "${THREE_WAY}" -eq 1 ]; then
+				if ! git -C "${dir}" apply --3way --whitespace=nowarn "${patch}"; then
+					error "cannot apply ${name}: the three-way merge failed"
+					conflicts=$(git -C "${dir}" diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ')
+					[ -n "${conflicts}" ] && info "conflicted paths: ${conflicts}"
+					return 1
+				fi
+			else
+				git -C "${dir}" apply --check "${patch}" || {
+					error "${name} does not apply; the tree is probably not at ${REV}"
+					return 1
+				}
+				run git -C "${dir}" apply --whitespace=nowarn "${patch}" || return 1
+			fi
 		else
 			(
 				cd -- "${dir}"
 				run patch -p1 --batch --forward --silent <"${patch}"
-			) || die "${name} does not apply; the tree is probably not at ${REV}"
+			) || {
+				error "${name} does not apply; the tree is probably not at ${REV}"
+				return 1
+			}
 		fi
 	done <"${GAD_ROOT}/patches/series"
+	return 0
 }
 
 verify_source_tree()
@@ -190,7 +220,7 @@ prepare_external_source()
 	fi
 
 	step "applying the patch series to ${dir}"
-	apply_series "${dir}"
+	apply_series "${dir}" || die "the series does not apply to ${dir}; reset that tree before retrying"
 	if [ "${GAD_DRY_RUN}" -eq 1 ]; then
 		printf '%s\n' "${dir}"
 		return 0
@@ -212,6 +242,10 @@ prepare_cached_source()
 	if [ "${GAD_DRY_RUN}" -eq 1 ]; then
 		print_command mkdir -p -- "${GAD_CACHE_DIR}"
 		print_command git clone --progress "${UPSTREAM_URL}" "${clone}"
+		if [ "${LATEST}" -eq 1 ]; then
+			print_command git -C "${clone}" fetch --prune --quiet origin master
+			print_command git -C "${clone}" rev-parse origin/master
+		fi
 		print_command git -C "${clone}" checkout --detach --force --quiet "${REV}"
 		while IFS= read -r name; do
 			[ -n "${name}" ] || continue
@@ -230,7 +264,18 @@ prepare_cached_source()
 			die "git clone failed; check the network or pass --source DIR"
 	fi
 
-	[ -d "${clone}/.git" ] || die "${clone} exists but is not a git checkout"
+	git -C "${clone}" rev-parse --git-dir >/dev/null 2>&1 ||
+		die "${clone} exists but is not a git checkout"
+
+	if [ "${LATEST}" -eq 1 ]; then
+		[ "${OFFLINE}" -eq 0 ] || die "--latest needs network access"
+		step "resolving the latest upstream master"
+		git -C "${clone}" fetch --prune --quiet origin master ||
+			die "cannot fetch upstream master"
+		REV=$(git -C "${clone}" rev-parse origin/master) ||
+			die "cannot resolve origin/master"
+		info "upstream master: ${REV}"
+	fi
 
 	if [ "${REFRESH}" -eq 1 ] && [ "${OFFLINE}" -eq 0 ]; then
 		step "fetching upstream updates"
@@ -245,7 +290,11 @@ prepare_cached_source()
 	run git -C "${clone}" checkout --detach --force --quiet "${REV}"
 	run git -C "${clone}" clean -ffdxq
 
-	apply_series "${clone}"
+	if ! apply_series "${clone}"; then
+		git -C "${clone}" reset --hard --quiet
+		git -C "${clone}" clean -ffdxq
+		die "upstream changed code this series depends on; the cached tree was reset (see patches/README.md)"
+	fi
 	write_stamp "${clone}"
 	ok "source tree prepared"
 	printf '%s\n' "${clone}"

@@ -40,6 +40,8 @@ the full GDB output:
 | `No space left on device` | Source, build and install trees need about 6 GiB | Free space or move `.cache`, `build` and the prefix to another volume |
 | Build killed with no message | Out of memory with too many jobs | `./build.sh --jobs 4` |
 | `error: unknown argument` | Typo in an option | `./build.sh --help` |
+| `--latest` stops with `three-way merge failed` | Upstream changed the exact code a patch touches | Rebase the series (patches/README.md), or build the pinned revision
+| `--latest and --source cannot be combined` | An external checkout has no upstream | Drop one of the two options |
 | `Python scripting is not supported` | The interpreter on `PATH` has no development headers | `brew install python`, then `./build.sh --reconfigure` |
 | `no usable python found at /usr/bin/python3` | The command line tools ship a stub Python | Point `GAD_PYTHON` at a real interpreter, or use `--no-python` |
 

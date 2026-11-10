@@ -8,7 +8,7 @@
 SHELL := /bin/bash
 ARGS ?=
 
-.PHONY: all build portable sign verify test doctor env clean distclean help
+.PHONY: all build portable latest sign verify test doctor env clean distclean help
 
 all: build
 
@@ -17,6 +17,9 @@ build:
 
 portable:
 	./build.sh --portable $(ARGS)
+
+latest:
+	./build.sh --latest $(ARGS)
 
 sign:
 	./scripts/sign.sh $(ARGS)
@@ -42,6 +45,7 @@ help:
 		'' \
 		'  make build       build, install and verify GDB' \
 		'  make portable    self-contained build (static GMP/MPFR, no Python)' \
+		'  make latest      build the current upstream master' \
 		'  make verify      run the smoke test against an existing install' \
 		'  make sign        re-sign the installed GDB' \
 		'  make doctor      check the toolchain, libraries and identity' \

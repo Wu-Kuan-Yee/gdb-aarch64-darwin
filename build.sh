@@ -26,6 +26,7 @@ RECONFIGURE=0
 CLEAN=0
 DISTCLEAN=0
 OFFLINE=0
+LATEST=0
 VERIFY_TIMEOUT=180
 STARTED_AT=$(date +%s)
 
@@ -60,6 +61,10 @@ Options:
   --clean            Remove the build directory before configuring
   --distclean        Also remove the cached source and installed tree
   --reconfigure      Re-run configure even if config.status looks current
+  --latest           Build the current upstream master instead of the pinned
+                     revision.  The patch series is applied with a three-way
+                     merge, so ordinary upstream drift is absorbed; a real
+                     conflict aborts the build with the conflicting files
   --offline          Never touch the network
   --no-sign          Skip signing; the result cannot debug anything
   --no-verify        Skip the smoke test
@@ -127,6 +132,10 @@ while [ "$#" -gt 0 ]; do
 			OFFLINE=1
 			shift
 			;;
+		--latest)
+			LATEST=1
+			shift
+			;;
 		--no-sign)
 			DO_SIGN=0
 			shift
@@ -167,6 +176,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$#" -eq 0 ] || die "unexpected argument: $1"
+
+if [ "${LATEST}" -eq 1 ] && [ -n "${SOURCE_OPT}" ]; then
+	die "--latest and --source cannot be combined"
+fi
 
 if [ "${DO_SIGN}" -eq 0 ] && [ "${DO_VERIFY}" -eq 1 ]; then
 	warn "the smoke test needs a signed GDB; skipping it because --no-sign was given"
@@ -240,6 +253,11 @@ config_is_current()
 	else
 		printf '%s' "${args}" | grep -Fq -- "--with-python=" && return 1
 	fi
+	if [ "${PORTABLE}" -eq 1 ]; then
+		printf '%s' "${args}" | grep -Fq -- "--without-python" || return 1
+	else
+		printf '%s' "${args}" | grep -Fq -- "--without-python" && return 1
+	fi
 	printf '%s' "${args}" | grep -Fq -- "--with-gmp=${gmp_real}" || return 1
 	printf '%s' "${args}" | grep -Fq -- "--with-mpfr=${mpfr_real}" || return 1
 	return 0
@@ -275,6 +293,13 @@ SDK=$(sdk_path)
 [ -n "${SDK}" ] && [ -d "${SDK}" ] || die "cannot find the macOS SDK; run xcode-select --install"
 
 if [ "${PORTABLE}" -eq 1 ]; then
+	# Homebrew's pkg-config searches /opt/homebrew by default, and python3
+	# on PATH may come from Homebrew too.  Keep the portable build away from
+	# both so that optional dependencies are not linked accidentally.
+	PKG_CONFIG_PATH=
+	PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig
+	export PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
+	unset LDFLAGS CPPFLAGS LIBS
 	step "preparing static GMP and MPFR"
 	"${SCRIPT_DIR}/scripts/build-deps.sh" --prefix "${GAD_CACHE_DIR}/deps" ||
 		die "cannot prepare the static libraries"
@@ -355,6 +380,9 @@ fi
 if [ "${OFFLINE}" -eq 1 ]; then
 	BOOTSTRAP_ARGS[${#BOOTSTRAP_ARGS[@]}]=--offline
 fi
+if [ "${LATEST}" -eq 1 ]; then
+	BOOTSTRAP_ARGS[${#BOOTSTRAP_ARGS[@]}]=--latest
+fi
 if [ "${#BOOTSTRAP_ARGS[@]}" -gt 0 ]; then
 	SOURCE_DIR=$("${SCRIPT_DIR}/scripts/bootstrap.sh" "${BOOTSTRAP_ARGS[@]}")
 else
@@ -363,6 +391,10 @@ fi
 [ -n "${SOURCE_DIR}" ] || die "bootstrap did not return a source directory"
 SOURCE_DIR=$(cd -- "${SOURCE_DIR}" && pwd -P) || die "cannot resolve source directory: ${SOURCE_DIR}"
 ok "source: ${SOURCE_DIR}"
+if [ "${LATEST}" -eq 1 ]; then
+	UPSTREAM_HEAD=$(git -C "${SOURCE_DIR}" rev-parse HEAD)
+	info "upstream: ${UPSTREAM_HEAD} (master at build time)"
+fi
 
 CONFIGURE_ARGS=(
 	"--srcdir=${SOURCE_DIR}"
@@ -375,6 +407,13 @@ CONFIGURE_ARGS=(
 )
 if [ -n "${PYTHON_BIN}" ]; then
 	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]="--with-python=${PYTHON_BIN}"
+fi
+if [ "${PORTABLE}" -eq 1 ]; then
+	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-python
+	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-guile
+	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-zstd
+	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-lzma
+	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-debuginfod
 fi
 
 if [ "${RECONFIGURE}" -eq 1 ] || ! config_is_current; then
