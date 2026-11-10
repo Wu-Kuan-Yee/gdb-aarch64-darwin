@@ -172,6 +172,16 @@ step "compiling tests/probe.c"
 /usr/bin/cc -g -O0 -fno-omit-frame-pointer -o "${PROBE}" "${GAD_ROOT}/tests/probe.c" ||
 	die "cannot compile the test program"
 
+# Python scripting is optional; when the build enabled it, make sure it
+# starts, since a broken interpreter shows up as a startup failure.
+if "${GDB_PATH}" --batch -nx -q -ex "show configuration" 2>/dev/null |
+	grep -q -- "--with-python="; then
+	OUTPUT=$("${GDB_PATH}" --batch -nx -q -ex "python print('python-ok')" 2>&1 || true)
+	check "python scripting starts" "python-ok"
+else
+	note "python scripting was not enabled in this build"
+fi
+
 printf '\n%sRunning the smoke test%s\n' "${C_BOLD}" "${C_RESET}"
 
 OUTPUT_FILE="${WORKDIR}/gdb-output.txt"
@@ -212,6 +222,49 @@ if [ "${STATUS}" -ne 0 ]; then
 else
 	PASSED=$((PASSED + 1))
 	printf '  %s ok %s GDB exited cleanly\n' "${C_GREEN}" "${C_RESET}"
+fi
+
+# Second phase: a library that is loaded after the first stop.  This covers
+# the dyld notifier and pending breakpoint resolution, which the single
+# binary test cannot reach.
+printf '\n%sRunning the shared library test%s\n' "${C_BOLD}" "${C_RESET}"
+
+LIBDIR="${WORKDIR}/lib"
+mkdir -p "${LIBDIR}"
+/usr/bin/cc -g -dynamiclib "${GAD_ROOT}/tests/library.c" -o "${LIBDIR}/libsample.dylib" ||
+	die "cannot build the test library"
+/usr/bin/cc -g -O0 "${GAD_ROOT}/tests/uses-library.c" -o "${LIBDIR}/uses-library" ||
+	die "cannot build the library test program"
+
+LIB_STATUS=0
+(
+	cd -- "${LIBDIR}"
+	run_with_timeout "${WORKDIR}/library-output.txt" \
+		"${GDB_PATH}" --batch -nx -q \
+		-x "${GAD_ROOT}/tests/smoke-library.gdb" \
+		--args "${LIBDIR}/uses-library"
+) || LIB_STATUS=$?
+
+OUTPUT=$(cat "${WORKDIR}/library-output.txt")
+if [ "${VERBOSE}" -eq 1 ]; then
+	printf '\n%s--- GDB output (library test) ---%s\n%s\n%s--- end ---%s\n\n' \
+		"${C_DIM}" "${C_RESET}" "${OUTPUT}" "${C_DIM}" "${C_RESET}"
+fi
+
+check "breakpoint in the not-yet-loaded library" 'Breakpoint 2 \(library_add\) pending'
+check "stopped inside the loaded library" 'Breakpoint 2, library_add \(a=2, b=3\)'
+check "library frame in backtrace" '#0[[:space:]]+library_add \(a=2, b=3\)'
+check "caller frame in backtrace" '#1[[:space:]]+0x[0-9a-f]+ in main \(\)'
+check "library arguments" '\$[0-9]+ = 3$'
+check "library program completed" 'result=5'
+check "library run exited normally" '\[Inferior 1 .* exited normally\]'
+if [ "${LIB_STATUS}" -ne 0 ]; then
+	FAILED=$((FAILED + 1))
+	printf '  %sfail%s shared library test exited with status %s\n' \
+		"${C_RED}" "${C_RESET}" "${LIB_STATUS}"
+else
+	PASSED=$((PASSED + 1))
+	printf '  %s ok %s shared library test exited cleanly\n' "${C_GREEN}" "${C_RESET}"
 fi
 
 printf '\n'
