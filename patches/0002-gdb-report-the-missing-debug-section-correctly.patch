@@ -1,7 +1,8 @@
 diff --git a/gdb/dwarf2/read.c b/gdb/dwarf2/read.c
+index 078fdd9850b..1526659b704 100644
 --- a/gdb/dwarf2/read.c
 +++ b/gdb/dwarf2/read.c
-@@ -14756,7 +14756,7 @@
+@@ -14756,7 +14756,7 @@ read_str_index (struct dwarf2_cu *cu,
    if (str_offsets_section->buffer == NULL)
      error (_("%s used without %s section"
  	     " in CU at offset %s [in module %s]"),

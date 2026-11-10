@@ -1,5 +1,5 @@
 diff --git a/configure b/configure
-index 4c2aa195810..9a80fb39118 100755
+index 2861694673e..fe6e705a8f0 100755
 --- a/configure
 +++ b/configure
 @@ -3935,7 +3935,7 @@ case "${target}" in
@@ -11,7 +11,7 @@ index 4c2aa195810..9a80fb39118 100755
      noconfigdirs="$noconfigdirs sim target-rda"
      ;;
    amdgcn*-*-*)
-@@ -22113,4 +22113,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
+@@ -22193,4 +22193,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
  $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
  fi
@@ -30,10 +30,10 @@ index cae0042411b..d69ae3637db 100644
      ;;
    amdgcn*-*-*)
 diff --git a/gdb/Makefile.in b/gdb/Makefile.in
-index 57f384170ab..eda40466ec3 100644
+index 41dbb814787..c6783da62b1 100644
 --- a/gdb/Makefile.in
 +++ b/gdb/Makefile.in
-@@ -720,6 +720,7 @@ ALL_AMD_DBGAPI_TARGET_OBS = \
+@@ -721,6 +721,7 @@ ALL_AMD_DBGAPI_TARGET_OBS = \
  # All target-dependent objects files that require 64-bit CORE_ADDR
  # (used with --enable-targets=all --enable-64-bit-bfd).
  ALL_64_TARGET_OBS = \
@@ -41,7 +41,7 @@ index 57f384170ab..eda40466ec3 100644
  	aarch64-fbsd-tdep.o \
  	aarch64-linux-tdep.o \
  	aarch64-newlib-tdep.o \
-@@ -1776,6 +1777,8 @@ ALLDEPFILES = \
+@@ -1793,6 +1794,8 @@ ALLDEPFILES = \
  	arch/riscv.c \
  	arch/tic6x.c \
  	aarch32-tdep.c \
@@ -482,7 +482,7 @@ index 4f5c161c854..0f705e3d407 100644
  		# Host: IA86 running Darwin
  		NATDEPFILES="${NATDEPFILES} i386-darwin-nat.o x86-nat.o \
 diff --git a/gdb/configure.tgt b/gdb/configure.tgt
-index 7313b31e42a..e2486f25b4f 100644
+index b9e0f80ce6a..0a8a8695f4f 100644
 --- a/gdb/configure.tgt
 +++ b/gdb/configure.tgt
 @@ -155,6 +155,11 @@ aarch64*-*-linux*)
@@ -497,7 +497,7 @@ index 7313b31e42a..e2486f25b4f 100644
  aarch64-*-mingw* | aarch64-*-windows*)
          # Target: Windows/aarch64
  	gdb_target_obs="aarch64-windows-tdep.o windows-tdep.o"
-@@ -782,6 +787,7 @@ gdb_target_obs="${cpu_obs} ${os_obs} ${gdb_target_obs}"
+@@ -778,6 +783,7 @@ gdb_target_obs="${cpu_obs} ${os_obs} ${gdb_target_obs}"
  # in sync with that file.
  
  case "${targ}" in

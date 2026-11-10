@@ -1,5 +1,5 @@
 diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
-index 8721dd5..712c77b 100644
+index e9c1eaa5f09..1f9b7eeb4c3 100644
 --- a/gdb/darwin-nat.c
 +++ b/gdb/darwin-nat.c
 @@ -2426,6 +2426,74 @@ set_enable_mach_exceptions (const char *args, int from_tty,
@@ -78,7 +78,7 @@ index 8721dd5..712c77b 100644
  darwin_nat_target::pid_to_exec_file (int pid)
  {
 diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
-index 518967c..9994d7c 100644
+index 518967cdf32..9994d7c73a0 100644
 --- a/gdb/darwin-nat.h
 +++ b/gdb/darwin-nat.h
 @@ -88,6 +88,8 @@ class darwin_nat_target : public inf_child_target

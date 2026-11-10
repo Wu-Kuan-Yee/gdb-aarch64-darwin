@@ -1,7 +1,8 @@
 diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 392911b2d04..96c26f5c21e 100644
 --- a/gdb/darwin-nat.c
 +++ b/gdb/darwin-nat.c
-@@ -1110,7 +1110,15 @@
+@@ -1110,7 +1110,15 @@ darwin_nat_target::decode_message (mach_msg_header_t *hdr,
  	      pid_t res_pid;
  	      int wstatus;
  

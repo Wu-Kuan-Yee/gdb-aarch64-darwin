@@ -19,6 +19,14 @@ revision and are applied in the order listed in `series` with
 | `0010` | `gdb/aarch64-darwin-tdep.c` | Recognise Darwin signal frames through the ucontext pointer when the system libraries have no symbols |
 | `0011` | `gdb/darwin-nat.c` | Implement `info proc mappings` with `mach_vm_region` and `proc_pidinfo` |
 
+## Applying with a three-way merge
+
+The files carry `index` lines, so `git apply --3way` can merge a patch into
+a tree that has moved.  `./build.sh --latest` relies on this to follow
+upstream master: ordinary drift is absorbed, and a genuine conflict is
+reported instead of applied with fuzz.  Fuzz is never used by the project's
+own scripts for exactly that reason.
+
 ## Keeping the series current
 
 The series targets the revision recorded as `UPSTREAM_REV` in

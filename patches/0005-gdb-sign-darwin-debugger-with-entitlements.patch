@@ -1,8 +1,8 @@
 diff --git a/gdb/Makefile.in b/gdb/Makefile.in
-index eda40466ec3..1f284732614 100644
+index c6783da62b1..c87db2c8659 100644
 --- a/gdb/Makefile.in
 +++ b/gdb/Makefile.in
-@@ -242,6 +242,7 @@ GDB_DATADIR = @GDB_DATADIR@
+@@ -243,6 +243,7 @@ GDB_DATADIR = @GDB_DATADIR@
  # Code signing.
  CODESIGN = codesign
  CODESIGN_CERT = @CODESIGN_CERT@
@@ -10,7 +10,7 @@ index eda40466ec3..1f284732614 100644
  
  # Flags to pass to gdb when invoked with "make run".
  GDBFLAGS =
-@@ -2371,13 +2372,15 @@ libgdb.a: $(LIBGDB_OBS)
+@@ -2420,13 +2421,15 @@ libgdb.a: $(LIBGDB_OBS)
  	$(RANLIB) libgdb.a
  
  # Removing the old gdb first works better if it is running, at least on SunOS.
@@ -29,7 +29,7 @@ index eda40466ec3..1f284732614 100644
  
  # This is useful when debugging GDB, because some Unix's don't let you run GDB
 diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
-index 8728b4653de..598f8943af4 100644
+index d434edacf12..392911b2d04 100644
 --- a/gdb/darwin-nat.c
 +++ b/gdb/darwin-nat.c
 @@ -136,8 +136,12 @@ static unsigned int darwin_debug_flag = 0;

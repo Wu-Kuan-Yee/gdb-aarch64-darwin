@@ -462,7 +462,7 @@ index 0f705e3d407..f653038d971 100644
  	    i386)
  		# Host: IA86 running Darwin
 diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
-index d9faf503e30..8728b4653de 100644
+index 312f67508c8..d434edacf12 100644
 --- a/gdb/darwin-nat.c
 +++ b/gdb/darwin-nat.c
 @@ -866,6 +866,15 @@ darwin_resume_thread (struct inferior *inf, darwin_thread_t *thread,

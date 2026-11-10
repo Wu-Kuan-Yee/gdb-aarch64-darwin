@@ -1,4 +1,5 @@
 diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
+index 187b821fd82..965044da5d0 100644
 --- a/gdb/aarch64-darwin-tdep.c
 +++ b/gdb/aarch64-darwin-tdep.c
 @@ -18,6 +18,8 @@
@@ -10,7 +11,7 @@ diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
  #include "extract-store-integer.h"
  #include "frame.h"
  #include "arch/aarch64.h"
-@@ -145,7 +147,54 @@
+@@ -145,6 +147,53 @@ aarch64_darwin_sigframe_init (const struct tramp_frame *self,
    trad_frame_set_id (cache, frame_id_build (sp, func));
  }
  
@@ -18,7 +19,7 @@ diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
 +   builds for a signal handler: the mcontext pointer has to be readable and
 +   the saved stack pointer and program counter have to be plausible.  */
 +
- static int
++static int
 +aarch64_darwin_ucontext_p (CORE_ADDR ucontext)
 +{
 +  struct gdbarch *gdbarch = current_inferior ()->arch ();
@@ -61,11 +62,10 @@ diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
 +  return sp != 0 && (sp & 0xf) == 0 && pc != 0;
 +}
 +
-+static int
+ static int
  aarch64_darwin_sigtramp_validate (const struct tramp_frame *self,
  				  const frame_info_ptr &this_frame,
- 				  CORE_ADDR *pc)
-@@ -153,14 +202,45 @@
+@@ -153,14 +202,45 @@ aarch64_darwin_sigtramp_validate (const struct tramp_frame *self,
    const char *name = nullptr;
    CORE_ADDR start = 0;
  
@@ -82,9 +82,7 @@ diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
 +      *pc = start;
 +      return 1;
 +    }
- 
--  *pc = start;
--  return 1;
++
 +  /* Modern macOS keeps the system libraries in the dyld shared cache, so the
 +     return address of a signal handler has no name to check.  The kernel
 +     leaves the ucontext pointer in x20, which is callee-saved and therefore
@@ -113,7 +111,9 @@ diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
 +
 +    return 1;
 +  }
-+
+ 
+-  *pc = start;
+-  return 1;
 +  return 0;
  }
  
