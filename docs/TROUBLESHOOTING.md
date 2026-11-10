@@ -40,6 +40,8 @@ the full GDB output:
 | `No space left on device` | Source, build and install trees need about 6 GiB | Free space or move `.cache`, `build` and the prefix to another volume |
 | Build killed with no message | Out of memory with too many jobs | `./build.sh --jobs 4` |
 | `error: unknown argument` | Typo in an option | `./build.sh --help` |
+| `Python scripting is not supported` | The interpreter on `PATH` has no development headers | `brew install python`, then `./build.sh --reconfigure` |
+| `no usable python found at /usr/bin/python3` | The command line tools ship a stub Python | Point `GAD_PYTHON` at a real interpreter, or use `--no-python` |
 
 ## Debugging problems
 
@@ -106,6 +108,28 @@ Delete unused watchpoints (`info watchpoints`, `delete N`).  Watchpoints
 also require the watched variable to live in memory; a value optimised into
 a register cannot be watched, so compile the program with `-O0` while
 debugging.
+
+### Backtraces stop inside libsystem
+
+`bt` shows a frame in `libsystem_kernel.dylib` and then `?? ()` or a
+truncated stack.  macOS keeps most system libraries in the dyld shared
+cache with no file on disk, so GDB has no unwind information for them.
+Backtraces that start in your own code are complete; a stopped-in-system
+frame cannot always be unwound.  This is a platform limitation, not a
+problem with the port.
+
+### `catch throw` or `catch syscall` never fires
+
+Catchpoints are implemented by planting a breakpoint on a system function
+(`__cxa_throw`, the syscall entry).  Those functions live in the shared
+cache, so the breakpoint cannot be resolved.  Use a breakpoint in your own
+code instead, or catch the exception at the point where it is thrown.
+
+### `info proc mappings` and `gcore` are not supported
+
+The Darwin target does not implement process mappings or core file
+generation.  `vmmap` and `lldb` provide the mappings, and `gcore` has no
+Mach-O core writer in GDB.
 
 ### `warning: unhandled dyld version (N)`
 

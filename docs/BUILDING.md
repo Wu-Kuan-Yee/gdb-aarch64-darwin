@@ -15,6 +15,7 @@ which options exist for less common situations.
 | GMP | GDB's expression evaluator | `brew install gmp` |
 | MPFR | GDB's floating point support | `brew install mpfr` |
 | Code signing identity | macOS authorises debuggers by signature | Xcode > Settings > Accounts |
+| Python with headers (optional) | Python scripting in GDB | `brew install python` |
 
 `./scripts/doctor.sh` reports the state of every item and exits non-zero
 when something required is missing.
@@ -65,6 +66,7 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 | `--jobs N` | Parallel make jobs, default number of CPUs |
 | `--source DIR` | Use an existing binutils-gdb checkout instead of the cache |
 | `--identity NAME` | Codesigning identity to use |
+| `--no-python` | Configure without Python scripting support |
 | `--build-dir DIR` | Build directory, default `./build` |
 | `--clean` | Remove `build/` before configuring |
 | `--distclean` | Also remove `dist/` and `.cache/` |
@@ -78,7 +80,29 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 
 Environment variables with the same meaning: `GAD_PREFIX`,
 `GAD_BUILD_DIR`, `GAD_CACHE_DIR`, `GAD_JOBS`, `CODESIGN_IDENTITY`,
-`GAD_GMP_PREFIX`, `GAD_MPFR_PREFIX`, `CC`, `CXX`, `NO_COLOR`.
+`GAD_GMP_PREFIX`, `GAD_MPFR_PREFIX`, `GAD_PYTHON`, `CC`, `CXX`, `NO_COLOR`.
+
+## Python scripting
+
+GDB's Python support needs the Python development headers.  The build looks
+for a usable interpreter, in this order: `GAD_PYTHON`, `python3` on `PATH`,
+`/opt/homebrew/bin/python3`, `/usr/local/bin/python3`.  An interpreter is
+only accepted when `Python.h` exists in its include directory, which rules
+out the stub that the command line tools provide.  Install a full Python
+(`brew install python`) to get scripting; otherwise the build configures
+`--without-python` and GDB works normally without it.
+
+Force the decision with `--no-python`, or point at a specific interpreter:
+
+```sh
+GAD_PYTHON=/opt/homebrew/bin/python3 ./build.sh --reconfigure
+```
+
+Check the result with:
+
+```sh
+./dist/bin/gdb --batch -ex 'python print(gdb.VERSION)'
+```
 
 ## Configure flags
 
