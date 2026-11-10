@@ -140,11 +140,16 @@ Catchpoints are implemented by planting a breakpoint on a system function
 cache, so the breakpoint cannot be resolved.  Use a breakpoint in your own
 code instead, or catch the exception at the point where it is thrown.
 
-### `info proc mappings` and `gcore` are not supported
+### `gcore` is not supported
 
-The Darwin target does not implement process mappings or core file
-generation.  `vmmap` and `lldb` provide the mappings, and `gcore` has no
-Mach-O core writer in GDB.
+GDB has no Mach-O core writer, so `gcore` fails on macOS.  `lldb` can save a
+core file:
+
+```sh
+lldb -o "process save-core /tmp/core" -p PID
+```
+
+`info proc mappings` is implemented by this port and works normally.
 
 ### `warning: unhandled dyld version (N)`
 

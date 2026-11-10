@@ -8,3 +8,4 @@
 0008-gdb-load-darwin-shared-libraries-on-current-macos.patch
 0009-gdb-handle-implicit-const-object-pointers.patch
 0010-gdb-unwind-darwin-signal-frames-without-symbols.patch
+0011-gdb-implement-info-proc-mappings.patch

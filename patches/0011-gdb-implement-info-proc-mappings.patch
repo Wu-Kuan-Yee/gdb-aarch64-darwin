@@ -1,0 +1,92 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 8721dd5..712c77b 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -2426,6 +2426,74 @@ set_enable_mach_exceptions (const char *args, int from_tty,
+     }
+ }
+ 
++/* Implement "info proc mappings" for the Darwin native target.  The memory
++   map is read with mach_vm_region; the file name of each region comes from
++   proc_pidinfo, which reports an empty path for anonymous memory.  */
++
++bool
++darwin_nat_target::info_proc (const char *args, enum info_proc_what what)
++{
++  if (what != IP_MAPPINGS && what != IP_ALL)
++    return false;
++
++  struct inferior *inf = current_inferior ();
++  darwin_inferior *priv = get_darwin_inferior (inf);
++
++  if (priv->task == MACH_PORT_NULL || inf->pid == 0)
++    return false;
++
++  struct gdbarch *gdbarch = inf->arch ();
++
++  gdb_printf (_("Mapped address spaces:\n\n"));
++  gdb_printf ("  %18s %18s %12s %10s  %s\n",
++	      "Start Addr", "End Addr", "Size", "Offset", "objfile");
++
++  mach_vm_address_t addr = 0;
++
++  while (true)
++    {
++      mach_vm_size_t size = 0;
++      vm_region_basic_info_data_64_t region_info;
++      mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++      mach_port_t object_name = MACH_PORT_NULL;
++      kern_return_t kret;
++
++      kret = mach_vm_region (priv->task, &addr, &size,
++			     VM_REGION_BASIC_INFO_64,
++			     (vm_region_info_t) &region_info,
++			     &count, &object_name);
++      if (kret != KERN_SUCCESS)
++	break;
++
++      char perms[5];
++      perms[0] = (region_info.protection & VM_PROT_READ) ? 'r' : '-';
++      perms[1] = (region_info.protection & VM_PROT_WRITE) ? 'w' : '-';
++      perms[2] = (region_info.protection & VM_PROT_EXECUTE) ? 'x' : '-';
++      perms[3] = region_info.shared ? 's' : 'p';
++      perms[4] = '\0';
++
++      char path[MAXPATHLEN];
++      path[0] = '\0';
++
++      struct proc_regionwithpathinfo region_path;
++      if (proc_pidinfo (inf->pid, PROC_PIDREGIONPATHINFO, addr,
++			&region_path, sizeof (region_path))
++	  == sizeof (region_path))
++	snprintf (path, sizeof (path), "%s", region_path.prp_vip.vip_path);
++
++      gdb_printf ("  %18s %18s %12s %10s  %s  %s\n",
++		  paddress (gdbarch, addr),
++		  paddress (gdbarch, addr + size),
++		  hex_string (size),
++		  hex_string (region_info.offset),
++		  perms, path);
++
++      addr += size;
++    }
++
++  return true;
++}
++
+ const char *
+ darwin_nat_target::pid_to_exec_file (int pid)
+ {
+diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
+index 518967c..9994d7c 100644
+--- a/gdb/darwin-nat.h
++++ b/gdb/darwin-nat.h
+@@ -88,6 +88,8 @@ class darwin_nat_target : public inf_child_target
+ 
+   ptid_t wait (ptid_t, struct target_waitstatus *, target_wait_flags) override;
+ 
++  bool info_proc (const char *, enum info_proc_what) override;
++
+   void mourn_inferior () override;
+ 
+   /* Let an architecture discard per-process state before the Darwin

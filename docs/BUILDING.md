@@ -67,6 +67,7 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 | `--source DIR` | Use an existing binutils-gdb checkout instead of the cache |
 | `--identity NAME` | Codesigning identity to use |
 | `--no-python` | Configure without Python scripting support |
+| `--portable` | Static GMP/MPFR, no Python: only macOS system libraries |
 | `--build-dir DIR` | Build directory, default `./build` |
 | `--clean` | Remove `build/` before configuring |
 | `--distclean` | Also remove `dist/` and `.cache/` |
@@ -81,6 +82,23 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 Environment variables with the same meaning: `GAD_PREFIX`,
 `GAD_BUILD_DIR`, `GAD_CACHE_DIR`, `GAD_JOBS`, `CODESIGN_IDENTITY`,
 `GAD_GMP_PREFIX`, `GAD_MPFR_PREFIX`, `GAD_PYTHON`, `CC`, `CXX`, `NO_COLOR`.
+
+## Portable builds
+
+`./build.sh --portable` produces a `gdb` that depends only on the libraries
+macOS ships.  Two things change:
+
+- GMP and MPFR are taken as static archives.  `scripts/build-deps.sh` copies
+  them from Homebrew when available and otherwise downloads the pinned
+  upstream tarballs and builds them with `--disable-shared`.  Everything is
+  staged under `.cache/deps`, outside the installation prefix.
+- Python is disabled, because linking a Homebrew Python framework would put
+  a third-party dylib back into the binary.
+
+After installation the build inspects `otool -L` and fails if anything
+outside `/usr/lib`, `/System` or `/Library/Apple` is referenced.  Use this
+mode when copying the binary to another Mac; a normal build is not
+relocatable because it points at `/opt/homebrew` paths.
 
 ## Python scripting
 

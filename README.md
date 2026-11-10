@@ -33,9 +33,9 @@ The smoke test in `tests/` exercises these on every build:
 | Backtraces across signal handlers | works |
 | `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
 | C++ types, virtual dispatch, method arguments | works |
-| Python scripting | works when a Python with development headers is installed |
+| Python scripting | works when a Python with development headers is installed, or in the portable build |
 | Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
-| `info proc mappings` | not supported by the Darwin target |
+| `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |
 | `gdbstub` / remote debugging | not implemented by the upstream Darwin layer |
 
@@ -76,6 +76,22 @@ To install somewhere else, for example next to other tools:
 ./build.sh --prefix "$HOME/Packages/gdb/aarch64-darwin"
 ```
 
+### A self-contained build
+
+By default the build links GMP and MPFR from Homebrew and enables Python when
+a suitable interpreter is found.  For a binary that can be handed to another
+Mac, build in portable mode:
+
+```sh
+./build.sh --portable
+```
+
+This stages static GMP and MPFR archives (from Homebrew, or built from the
+pinned upstream sources when Homebrew is absent) and disables Python, so the
+installed `gdb` links only against macOS system libraries.  The build checks
+this with `otool -L` and fails if a third-party library is still referenced.
+The trade-off is no Python scripting in the portable binary.
+
 ## Using it
 
 ```sh
@@ -96,7 +112,7 @@ signed with `get-task-allow`:
 ## How the build works
 
 ```text
-patches/             the AArch64 Darwin backend, ten ordered diffs
+patches/             the AArch64 Darwin backend, eleven ordered diffs
 scripts/bootstrap.sh clone upstream once, check out the pinned revision,
                      apply the patch series
 build.sh             bootstrap, configure, make, install, sign, verify
@@ -155,8 +171,8 @@ upstream revision and rebuild; `patches/README.md` describes the procedure.
 - The standard C++ library on macOS is libc++, for which GDB has no pretty
   printers.  `print vector` shows the container's internal fields rather
   than a formatted list; the types and values are still correct.
-- `gcore` and `info proc mappings` are implemented only for targets that
-  support them; the Darwin target does not.
+- `gcore` needs a Mach-O core writer that GDB does not have; `lldb` can
+  save a core file if one is needed.
 - GDB learns the library list at the first stop.  A breakpoint on a
   function in a library that is `dlopen`ed before the program reaches any
   breakpoint stays pending; stop once (`start`) before continuing if a

@@ -179,6 +179,14 @@ stack pointer and program counter) and the return address is outside the
 program being debugged.  `bt` now shows the handler, `<signal handler
 called>` and the interrupted frame.
 
+### 0011 — process mappings
+
+`info proc mappings` was the one `info proc` subcommand that could be
+implemented with public Mach APIs.  The target walks the task's address
+space with `mach_vm_region`, and asks `proc_pidinfo` for the file backing
+each region.  Anonymous memory simply has no name.  The output follows the
+Linux layout so that the same scripts and habits work.
+
 ## Capability matrix
 
 | Feature | Mechanism | Notes |
@@ -191,6 +199,7 @@ called>` and the interrupted frame.
 | Shared libraries | `solib-darwin.c` | dyld image list, refreshed after startup |
 | Threads | Mach thread ports | `info threads`, per-thread registers |
 | Attach | `task_for_pid` | target must allow it |
+| `info proc mappings` | `mach_vm_region` | per-region path from `proc_pidinfo` |
 
 ## Design constraints
 

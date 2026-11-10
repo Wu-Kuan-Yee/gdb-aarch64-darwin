@@ -17,6 +17,7 @@ revision and are applied in the order listed in `series` with
 | `0008` | `gdb/solib-darwin.c`, `gdb/darwin-nat.c` | Load the dyld image list once dyld publishes it, accept current dyld versions, and skip libraries that only exist in the shared cache |
 | `0009` | `gdb/dwarf2/read.c` | Handle `DW_AT_object_pointer` with `DW_FORM_implicit_const`, as emitted by current Clang |
 | `0010` | `gdb/aarch64-darwin-tdep.c` | Recognise Darwin signal frames through the ucontext pointer when the system libraries have no symbols |
+| `0011` | `gdb/darwin-nat.c` | Implement `info proc mappings` with `mach_vm_region` and `proc_pidinfo` |
 
 ## Keeping the series current
 
