@@ -74,6 +74,11 @@ ok()
 	printf '%s ok %s %s\n' "${C_GREEN}" "${C_RESET}" "$*" >&2
 }
 
+note()
+{
+	printf '  %s  - %s %s\n' "${C_DIM}" "${C_RESET}" "$*" >&2
+}
+
 warn()
 {
 	printf '%swarn%s %s\n' "${C_YELLOW}" "${C_RESET}" "$*" >&2
@@ -95,6 +100,19 @@ debug()
 	if [ "${GAD_VERBOSE}" -eq 1 ]; then
 		printf '%sdebug%s %s\n' "${C_DIM}" "${C_RESET}" "$*" >&2
 	fi
+}
+
+# Remove a directory that this project owns.  Refuses anything that is clearly
+# not a build artefact, so a mistyped --prefix cannot wipe the home directory.
+remove_tree()
+{
+	local path=$1
+	case "${path}" in
+		""|"/"|"//"|"$HOME")
+			die "refusing to remove ${path}"
+			;;
+	esac
+	run rm -rf -- "${path}"
 }
 
 # Print a command exactly as it would be executed.  Used by the dry-run paths.
