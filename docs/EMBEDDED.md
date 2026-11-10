@@ -9,6 +9,21 @@ the debugger needs nothing outside `/usr/lib` and `/System` at run time.
 `./build.sh --embedded` drives the whole pipeline.  This document explains
 what it does and what to expect.
 
+## Without Homebrew
+
+```sh
+./build.sh --embedded --from-source
+```
+
+`scripts/build-deps-source.sh` downloads, verifies and builds static
+archives of: pkgconf 3.0.10, GMP 6.3.0, MPFR 4.2.2, OpenSSL 3.5.9, xz
+5.8.4, zstd 1.5.7, libb2 0.98.1, libunistring 1.5, bdw-gc 8.2.12,
+libltdl 2.6.2 and Guile 3.0.11.  CPython 3.12.7 is built afterwards.  All
+tarballs are pinned by SHA-256 and staged under `.cache/embedded/src`.
+
+Expect about 25 to 35 minutes on the first run; later runs reuse the
+staged libraries and only rebuild CPython when the dependency mode changes.
+
 ## What the result looks like
 
 ```text
@@ -92,7 +107,7 @@ directories from `GDB_EMBEDDED_ROOT`.
   prints should end with `(force-output)`.
 - GDB needs `SHELL` in the environment to start an inferior through the
   shell. This is pre-existing behaviour, not specific to this build.
-- Rebuilding requires the staged `/tmp` prefixes above; they are build
-  inputs, not runtime dependencies.
+- Rebuilding requires the staged prefixes under `.cache/embedded`; they
+  are build inputs, not runtime dependencies.
 - The installed tree is about 137 MB: 23 MB debugger, 57 MB Python
   standard library, 6 MB Guile sources and 48 MB Guile's compiled cache.

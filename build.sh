@@ -79,7 +79,9 @@ Options:
                      installed GDB depends only on macOS system libraries
   --embedded         Static Python and Guile with their runtime data bundled;
                      bin/gdb is a real executable and needs only system
-                     libraries (see docs/EMBEDDED.md)
+                     libraries.  Add --from-source to build every dependency
+                     from source instead of using Homebrew archives
+                     (see docs/EMBEDDED.md)
   --build-dir DIR    Build directory (default: ${BUILD_DIR})
   --clean            Remove the build directory before configuring
   --distclean        Also remove the cached source and installed tree

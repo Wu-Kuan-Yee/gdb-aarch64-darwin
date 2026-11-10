@@ -98,8 +98,16 @@ installed `gdb` links only against macOS system libraries.
 
 Python and Guile are linked as static archives and their data directories
 are installed under the prefix; `bin/gdb` is the debugger itself, not a
-launcher, and GDB finds the runtimes through a compile-time root.  See
-[EMBEDDED.md](docs/EMBEDDED.md).  The build checks
+launcher, and GDB finds the runtimes through a compile-time root.
+
+Add `--from-source` to build every dependency from its pinned tarball, so
+not even Homebrew is needed at build time:
+
+```sh
+./build.sh --embedded --from-source
+```
+
+See [EMBEDDED.md](docs/EMBEDDED.md).  The build checks
 this with `otool -L` and fails if a third-party library is still referenced.
 The trade-off is no Python scripting in the portable binary.
 

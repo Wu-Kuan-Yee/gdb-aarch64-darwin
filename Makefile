@@ -8,7 +8,7 @@
 SHELL := /bin/bash
 ARGS ?=
 
-.PHONY: all build portable latest embedded sign verify test doctor env clean distclean help
+.PHONY: all build portable latest embedded embedded-source sign verify test doctor env clean distclean help
 
 all: build
 
@@ -23,6 +23,9 @@ latest:
 
 embedded:
 	./build.sh --embedded $(ARGS)
+
+embedded-source:
+	./build.sh --embedded --from-source $(ARGS)
 
 sign:
 	./scripts/sign.sh $(ARGS)
@@ -50,6 +53,7 @@ help:
 		'  make portable    self-contained build (static GMP/MPFR, no Python)' \
 		'  make latest      build the current upstream master' \
 		'  make embedded    static Python/Guile with bundled runtime data' \
+		'  make embedded-source  same, every dependency built from source' \
 		'  make verify      run the smoke test against an existing install' \
 		'  make sign        re-sign the installed GDB' \
 		'  make doctor      check the toolchain, libraries and identity' \
