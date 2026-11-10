@@ -101,9 +101,9 @@ debug()
 print_command()
 {
 	local arg
-	printf '+'
+	printf '+' >&2
 	for arg in "$@"; do
-		printf ' %q' "${arg}"
+		printf ' %q' "${arg}" >&2
 	done
 	printf '\n' >&2
 }
