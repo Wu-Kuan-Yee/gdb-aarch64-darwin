@@ -1,0 +1,103 @@
+diff --git a/gdb/aarch64-darwin-nat.c b/gdb/aarch64-darwin-nat.c
+index 3111f2a5cf1..dd8b4c5ea10 100644
+--- a/gdb/aarch64-darwin-nat.c
++++ b/gdb/aarch64-darwin-nat.c
+@@ -402,8 +402,20 @@ aarch64_darwin_nat_target::store_registers (struct regcache *regcache,
+ void
+ darwin_set_sstep (thread_t thread, int enable)
+ {
++  pid_t pid = inferior_ptid.pid ();
+   const aarch64_debug_reg_state *state
+-    = aarch64_lookup_debug_reg_state (inferior_ptid.pid ());
++    = aarch64_lookup_debug_reg_state (pid);
++
++  /* Breakpoints and watchpoints can be requested before run.  At that point
++     the generic AArch64 bookkeeping is keyed by PID 0, whereas Mach assigns
++     the inferior its real PID only after launch.  Transfer that pending
++     state before programming the first thread.  */
++  if (state == nullptr && pid != 0)
++    {
++      aarch64_move_debug_reg_state (0, pid);
++      state = aarch64_lookup_debug_reg_state (pid);
++    }
++
+   if (state != nullptr)
+     darwin_arm64_install_debug_state (thread, *state, enable != 0);
+   else
+@@ -423,9 +435,11 @@ darwin_set_sstep (thread_t thread, int enable)
+ }
+ 
+ /* Implement hardware watchpoint reporting for a Mach exception.  Darwin
+-   reports an ARM debug watchpoint as EXC_BAD_ACCESS/EXC_ARM_DA_DEBUG.  FAR is
+-   read from the stopped thread's exception state because the generic
+-   exception message stores only 32-bit integer_t values.  */
++   reports an ARM debug watchpoint as EXC_BREAKPOINT/EXC_ARM_DA_DEBUG on
++   current Apple Silicon systems, although older Darwin variants can use
++   EXC_BAD_ACCESS.  FAR is read from the stopped thread's exception state
++   because the generic exception message stores only 32-bit integer_t values.
++   */
+ 
+ std::vector<CORE_ADDR>
+ aarch64_darwin_nat_target::stopped_data_addresses ()
+@@ -435,7 +449,8 @@ aarch64_darwin_nat_target::stopped_data_addresses ()
+     return {};
+ 
+   darwin_thread_info *darwin_thread = get_darwin_thread_info (thread);
+-  if (darwin_thread->event.ex_type != EXC_BAD_ACCESS
++  if ((darwin_thread->event.ex_type != EXC_BREAKPOINT
++       && darwin_thread->event.ex_type != EXC_BAD_ACCESS)
+       || darwin_thread->event.data_count < 1
+       || darwin_thread->event.ex_data[0] != EXC_ARM_DA_DEBUG)
+     return {};
+@@ -532,5 +547,8 @@ INIT_GDB_FILE (aarch64_darwin_nat)
+   add_inf_child_target (&darwin_target);
+   aarch64_initialize_hw_point ();
+   aarch64_num_bp_regs = AARCH64_HBP_MAX_NUM;
+-  aarch64_num_wp_regs = AARCH64_HWP_MAX_NUM;
++  /* arm_debug_state64_t exposes sixteen slots, but Apple Silicon implements
++     four user watchpoint resources.  Keeping the generic maximum here makes
++     its free-slot search select an unimplemented high slot.  */
++  aarch64_num_wp_regs = 4;
+ }
+diff --git a/gdb/aarch64-nat.c b/gdb/aarch64-nat.c
+index 8f07fc64755..aa386666de9 100644
+--- a/gdb/aarch64-nat.c
++++ b/gdb/aarch64-nat.c
+@@ -60,6 +60,22 @@ aarch64_remove_debug_reg_state (pid_t pid)
+   aarch64_debug_process_state.erase (pid);
+ }
+ 
++/* See aarch64-nat.h.  */
++
++void
++aarch64_move_debug_reg_state (pid_t from_pid, pid_t to_pid)
++{
++  if (from_pid == to_pid)
++    return;
++
++  auto from = aarch64_debug_process_state.find (from_pid);
++  if (from == aarch64_debug_process_state.end ())
++    return;
++
++  aarch64_debug_process_state.emplace (to_pid, from->second);
++  aarch64_debug_process_state.erase (from);
++}
++
+ /* Returns the number of hardware watchpoints of type TYPE that we can
+    set.  Value is positive if we can set CNT watchpoints, zero if
+    setting watchpoints of type TYPE is not supported, and negative if
+diff --git a/gdb/aarch64-nat.h b/gdb/aarch64-nat.h
+index f9300d525eb..4874f95cec2 100644
+--- a/gdb/aarch64-nat.h
++++ b/gdb/aarch64-nat.h
+@@ -45,6 +45,10 @@ struct aarch64_debug_reg_state *aarch64_get_debug_reg_state (pid_t pid);
+ 
+ void aarch64_remove_debug_reg_state (pid_t pid);
+ 
++/* Move pending debug-register state recorded before an inferior has a real
++   PID to the PID assigned when the inferior is launched.  */
++void aarch64_move_debug_reg_state (pid_t from_pid, pid_t to_pid);
++
+ /* Helper functions used by aarch64_nat_target below.  See their
+    definitions.  */
+ 

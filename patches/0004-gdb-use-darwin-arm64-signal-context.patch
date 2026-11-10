@@ -1,0 +1,28 @@
+diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
+index bb9d190d237..187b821fd82 100644
+--- a/gdb/aarch64-darwin-tdep.c
++++ b/gdb/aarch64-darwin-tdep.c
+@@ -67,9 +67,11 @@
+ # define DARWIN_ARM64_MCONTEXT_NS_MEMBER ns
+ #endif
+ 
+-/* The Apple ARM64 signal trampoline passes the ucontext pointer in x4
+-   before calling the user handler.  The mcontext contains the same ARM
+-   thread-state and NEON layouts used by thread_get_state.  */
++/* The Apple ARM64 signal trampoline receives the ucontext pointer in x4 and
++   copies it to x20 before calling the user handler.  x20 is callee-saved, so
++   it remains available when GDB unwinds the handler's return into the
++   trampoline.  The mcontext contains the same ARM thread-state and NEON
++   layouts used by thread_get_state.  */
+ 
+ static CORE_ADDR
+ aarch64_darwin_signal_mcontext (const frame_info_ptr &this_frame)
+@@ -77,7 +79,7 @@ aarch64_darwin_signal_mcontext (const frame_info_ptr &this_frame)
+   struct gdbarch *gdbarch = get_frame_arch (this_frame);
+   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+   CORE_ADDR ucontext
+-    = get_frame_register_unsigned (this_frame, AARCH64_X0_REGNUM + 4);
++    = get_frame_register_unsigned (this_frame, AARCH64_X0_REGNUM + 20);
+   gdb_byte buf[8];
+ 
+   if (target_read_memory

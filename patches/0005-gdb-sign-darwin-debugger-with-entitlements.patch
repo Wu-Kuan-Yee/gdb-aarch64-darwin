@@ -1,0 +1,127 @@
+diff --git a/gdb/Makefile.in b/gdb/Makefile.in
+index eda40466ec3..1f284732614 100644
+--- a/gdb/Makefile.in
++++ b/gdb/Makefile.in
+@@ -242,6 +242,7 @@ GDB_DATADIR = @GDB_DATADIR@
+ # Code signing.
+ CODESIGN = codesign
+ CODESIGN_CERT = @CODESIGN_CERT@
++CODESIGN_ENTITLEMENTS = $(srcdir)/gdb-debugger.entitlements
+ 
+ # Flags to pass to gdb when invoked with "make run".
+ GDBFLAGS =
+@@ -2371,13 +2372,15 @@ libgdb.a: $(LIBGDB_OBS)
+ 	$(RANLIB) libgdb.a
+ 
+ # Removing the old gdb first works better if it is running, at least on SunOS.
+-gdb$(EXEEXT): gdb.o $(LIBGDB_OBS) $(CDEPS) $(TDEPLIBS)
++gdb$(EXEEXT): gdb.o $(LIBGDB_OBS) $(CDEPS) $(TDEPLIBS) \
++	$(CODESIGN_ENTITLEMENTS)
+ 	$(SILENCE) rm -f gdb$(EXEEXT)
+ 	$(ECHO_CXXLD) $(CC_LD) $(INTERNAL_LDFLAGS) $(WIN32LDAPP) \
+ 		-o gdb$(EXEEXT) gdb.o $(LIBGDB_OBS) \
+ 		$(TDEPLIBS) $(TUI_LIBRARY) $(CLIBS) $(LOADLIBES)
+ ifneq ($(CODESIGN_CERT),)
+-	$(ECHO_SIGN) $(CODESIGN) -s $(CODESIGN_CERT) gdb$(EXEEXT)
++	$(ECHO_SIGN) $(CODESIGN) -s $(CODESIGN_CERT) --options runtime \
++		--entitlements $(CODESIGN_ENTITLEMENTS) gdb$(EXEEXT)
+ endif
+ 
+ # This is useful when debugging GDB, because some Unix's don't let you run GDB
+diff --git a/gdb/NEWS b/gdb/NEWS
+index 10c182067f9..bbc84c20545 100644
+--- a/gdb/NEWS
++++ b/gdb/NEWS
+@@ -3,6 +3,12 @@
+ 
+ *** Changes since GDB 18
+ 
++* On macOS, --enable-codesign=CERT now signs GDB with the Hardened Runtime and
++  the com.apple.security.cs.debugger entitlement.  To debug an inferior
++  through the native Darwin target, the inferior must also be signed with the
++  com.apple.security.get-task-allow entitlement.  A plain executable
++  produced by /usr/bin/cc -g does not carry that entitlement.
++
+ *** Changes in GDB 18
+ 
+ * Support for the Common Trace Format (CTF) has been removed.  GDB now
+diff --git a/gdb/README b/gdb/README
+index 492b0891668..88e5edc3b09 100644
+--- a/gdb/README
++++ b/gdb/README
+@@ -97,6 +97,41 @@ section of this README.
+ type while debugging a program running on a machine of another type.
+ See below.
+ 
++macOS Darwin native target signing
++==================================
++
++   On macOS, the native Darwin target obtains the inferior's Mach task port
++   through task_for_pid.  Configure GDB with a trusted development signing
++   identity so that --enable-codesign adds the Hardened Runtime and the
++   com.apple.security.cs.debugger entitlement:
++
++      <source-dir>/gdb/configure --enable-codesign="Apple Development: ..."
++      make -C <build-dir>/gdb gdb
++
++   The inferior must also opt in to debugging.  A normal /usr/bin/cc -g link
++   does not add com.apple.security.get-task-allow.  For a local development
++   build, sign the resulting executable with an Apple Development identity
++   and an entitlements file containing:
++
++      <?xml version="1.0" encoding="UTF-8"?>
++      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
++        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++      <plist version="1.0"><dict>
++        <key>com.apple.security.get-task-allow</key><true/>
++      </dict></plist>
++
++   Apply it after every rebuild, for example:
++
++      codesign --force --options runtime \
++        --entitlements inferior.entitlements \
++        --sign "Apple Development: ..." ./program
++
++   Check both sides before running GDB:
++
++      security find-identity -v -p codesigning
++      codesign -d --entitlements :- <path-to-gdb>
++      codesign -d --entitlements :- <path-to-inferior>
++
+ 
+ More Documentation
+ ******************
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 8728b4653de..598f8943af4 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -136,8 +136,12 @@ static unsigned int darwin_debug_flag = 0;
+ /* Create a __TEXT __info_plist section in the executable so that gdb could
+    be signed.  This is required to get an authorization for task_for_pid.
+ 
+-   Once gdb is built, you must codesign it with any system-trusted signing
+-   authority.  See taskgated(8) for details.  */
++   Once gdb is built, it must be signed with a system-trusted signing
++   authority and the com.apple.security.cs.debugger entitlement.  The
++   --enable-codesign configure option supplies that entitlement automatically.
++   The inferior must separately be signed with
++   com.apple.security.get-task-allow; a plain /usr/bin/cc -g build does not
++   acquire that entitlement.  See taskgated(8) for details.  */
+ static const unsigned char info_plist[]
+ __attribute__ ((section ("__TEXT,__info_plist"),used)) =
+   "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+diff --git a/gdb/gdb-debugger.entitlements b/gdb/gdb-debugger.entitlements
+new file mode 100644
+index 00000000000..871618bde2e
+--- /dev/null
++++ b/gdb/gdb-debugger.entitlements
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
++  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++	<key>com.apple.security.cs.debugger</key>
++	<true/>
++</dict>
++</plist>

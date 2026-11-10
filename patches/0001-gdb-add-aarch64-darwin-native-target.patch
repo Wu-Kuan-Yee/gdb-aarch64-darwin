@@ -1,0 +1,507 @@
+diff --git a/configure b/configure
+index 4c2aa195810..9a80fb39118 100755
+--- a/configure
++++ b/configure
+@@ -3935,7 +3935,7 @@ case "${target}" in
+   *-*-chorusos)
+     ;;
+   aarch64-*-darwin*)
+-    noconfigdirs="$noconfigdirs ld gas gdb gprof"
++    noconfigdirs="$noconfigdirs ld gas gprof"
+     noconfigdirs="$noconfigdirs sim target-rda"
+     ;;
+   amdgcn*-*-*)
+@@ -22113,4 +22113,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
+   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
+ $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
+ fi
+-
+diff --git a/configure.ac b/configure.ac
+index cae0042411b..d69ae3637db 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1104,7 +1104,7 @@ case "${target}" in
+   *-*-chorusos)
+     ;;
+   aarch64-*-darwin*)
+-    noconfigdirs="$noconfigdirs ld gas gdb gprof"
++    noconfigdirs="$noconfigdirs ld gas gprof"
+     noconfigdirs="$noconfigdirs sim target-rda"
+     ;;
+   amdgcn*-*-*)
+diff --git a/gdb/Makefile.in b/gdb/Makefile.in
+index 57f384170ab..eda40466ec3 100644
+--- a/gdb/Makefile.in
++++ b/gdb/Makefile.in
+@@ -720,6 +720,7 @@ ALL_AMD_DBGAPI_TARGET_OBS = \
+ # All target-dependent objects files that require 64-bit CORE_ADDR
+ # (used with --enable-targets=all --enable-64-bit-bfd).
+ ALL_64_TARGET_OBS = \
++	aarch64-darwin-tdep.o \
+ 	aarch64-fbsd-tdep.o \
+ 	aarch64-linux-tdep.o \
+ 	aarch64-newlib-tdep.o \
+@@ -1776,6 +1777,8 @@ ALLDEPFILES = \
+ 	arch/riscv.c \
+ 	arch/tic6x.c \
+ 	aarch32-tdep.c \
++	aarch64-darwin-nat.c \
++	aarch64-darwin-tdep.c \
+ 	aarch64-fbsd-nat.c \
+ 	aarch64-fbsd-tdep.c \
+ 	aarch64-linux-nat.c \
+diff --git a/gdb/aarch64-darwin-nat.c b/gdb/aarch64-darwin-nat.c
+new file mode 100644
+index 00000000000..a50713109e1
+--- /dev/null
++++ b/gdb/aarch64-darwin-nat.c
+@@ -0,0 +1,355 @@
++/* Native-dependent code for AArch64 Darwin.
++
++   Copyright (C) 2026 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include "gdbarch.h"
++#include "arch-utils.h"
++#include "inferior.h"
++#include "regcache.h"
++#include "aarch64-tdep.h"
++#include "arch/aarch64.h"
++#include "darwin-nat.h"
++
++#include <mach/arm/thread_status.h>
++#include <stdint.h>
++
++/* The Darwin ARM64 thread-state structures use the UNIX03 spelling when
++   GDB is compiled against the current macOS SDK.  Keep the non-UNIX03 form
++   here as well, so the register mapping remains easy to audit.  */
++
++#if __DARWIN_UNIX03
++# define DARWIN_ARM64_X(state, index) ((state).__x[index])
++# define DARWIN_ARM64_CPSR(state) ((state).__cpsr)
++# define DARWIN_ARM64_V(state, index) ((state).__v[index])
++# define DARWIN_ARM64_FPSR(state) ((state).__fpsr)
++# define DARWIN_ARM64_FPCR(state) ((state).__fpcr)
++# define DARWIN_ARM64_MDSCR(state) ((state).__mdscr_el1)
++#else
++# define DARWIN_ARM64_X(state, index) ((state).x[index])
++# define DARWIN_ARM64_CPSR(state) ((state).cpsr)
++# define DARWIN_ARM64_V(state, index) ((state).q[index])
++# define DARWIN_ARM64_FPSR(state) ((state).fpsr)
++# define DARWIN_ARM64_FPCR(state) ((state).fpcr)
++# define DARWIN_ARM64_MDSCR(state) ((state).mdscr_el1)
++#endif
++
++/* Use the SDK accessors rather than naming the fields directly.  On an
++   arm64e SDK those accessors also handle the pointer-authentication metadata
++   carried by the kernel thread state.  */
++
++static CORE_ADDR
++darwin_arm64_get_pointer (const arm_thread_state64_t &state, int regnum)
++{
++  switch (regnum)
++    {
++    case AARCH64_FP_REGNUM:
++      return (CORE_ADDR) arm_thread_state64_get_fp (state);
++    case AARCH64_LR_REGNUM:
++      return (CORE_ADDR) arm_thread_state64_get_lr (state);
++    case AARCH64_SP_REGNUM:
++      return (CORE_ADDR) arm_thread_state64_get_sp (state);
++    case AARCH64_PC_REGNUM:
++      return (CORE_ADDR) arm_thread_state64_get_pc (state);
++    default:
++      gdb_assert_not_reached ("invalid Darwin ARM64 pointer register");
++    }
++}
++
++static void
++darwin_arm64_set_pointer (arm_thread_state64_t &state, int regnum,
++			   CORE_ADDR value)
++{
++  void *pointer = (void *) (uintptr_t) value;
++  switch (regnum)
++    {
++    case AARCH64_FP_REGNUM:
++      arm_thread_state64_set_fp (state, value);
++      break;
++    case AARCH64_LR_REGNUM:
++      arm_thread_state64_set_lr_fptr (state, pointer);
++      break;
++    case AARCH64_SP_REGNUM:
++      arm_thread_state64_set_sp (state, value);
++      break;
++    case AARCH64_PC_REGNUM:
++      arm_thread_state64_set_pc_fptr (state, pointer);
++      break;
++    default:
++      gdb_assert_not_reached ("invalid Darwin ARM64 pointer register");
++    }
++}
++
++static bool
++darwin_arm64_gpr_regnum_p (int regnum)
++{
++  return (regnum == -1
++	  || (regnum >= AARCH64_X0_REGNUM
++	      && regnum <= AARCH64_CPSR_REGNUM));
++}
++
++static bool
++darwin_arm64_fpr_regnum_p (int regnum)
++{
++  return (regnum == -1
++	  || (regnum >= AARCH64_V0_REGNUM
++	      && regnum <= AARCH64_FPCR_REGNUM));
++}
++
++static bool
++darwin_arm64_get_thread_state (thread_t thread, arm_thread_state64_t *state)
++{
++  mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
++  kern_return_t ret = thread_get_state (thread, ARM_THREAD_STATE64,
++					(thread_state_t) state, &count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_get_state(ARM_THREAD_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++static bool
++darwin_arm64_set_thread_state (thread_t thread, arm_thread_state64_t *state)
++{
++  mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
++  kern_return_t ret = thread_set_state (thread, ARM_THREAD_STATE64,
++					(thread_state_t) state, count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_set_state(ARM_THREAD_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++static bool
++darwin_arm64_get_neon_state (thread_t thread, arm_neon_state64_t *state)
++{
++  mach_msg_type_number_t count = ARM_NEON_STATE64_COUNT;
++  kern_return_t ret = thread_get_state (thread, ARM_NEON_STATE64,
++					(thread_state_t) state, &count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_get_state(ARM_NEON_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++static bool
++darwin_arm64_set_neon_state (thread_t thread, arm_neon_state64_t *state)
++{
++  mach_msg_type_number_t count = ARM_NEON_STATE64_COUNT;
++  kern_return_t ret = thread_set_state (thread, ARM_NEON_STATE64,
++					(thread_state_t) state, count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_set_state(ARM_NEON_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++struct aarch64_darwin_nat_target final : public darwin_nat_target
++{
++  void fetch_registers (struct regcache *, int) override;
++  void store_registers (struct regcache *, int) override;
++};
++
++static aarch64_darwin_nat_target darwin_target;
++
++void
++aarch64_darwin_nat_target::fetch_registers (struct regcache *regcache,
++					     int regnum)
++{
++  thread_t thread = regcache->ptid ().tid ();
++
++  if (darwin_arm64_gpr_regnum_p (regnum))
++    {
++      arm_thread_state64_t state;
++      if (darwin_arm64_get_thread_state (thread, &state))
++	{
++	  for (int i = 0; i < 29; ++i)
++	    if (regnum == -1 || regnum == AARCH64_X0_REGNUM + i)
++	      regcache->raw_supply (AARCH64_X0_REGNUM + i,
++				     &DARWIN_ARM64_X (state, i));
++
++	  for (int i = AARCH64_FP_REGNUM; i <= AARCH64_PC_REGNUM; ++i)
++	    if (regnum == -1 || regnum == i)
++	      {
++		CORE_ADDR value = darwin_arm64_get_pointer (state, i);
++		regcache->raw_supply (i, &value);
++	      }
++
++	  if (regnum == -1 || regnum == AARCH64_CPSR_REGNUM)
++	    regcache->raw_supply (AARCH64_CPSR_REGNUM,
++				   &DARWIN_ARM64_CPSR (state));
++	}
++    }
++
++  if (darwin_arm64_fpr_regnum_p (regnum))
++    {
++      arm_neon_state64_t state;
++      if (darwin_arm64_get_neon_state (thread, &state))
++	{
++	  for (int i = 0; i < 32; ++i)
++	    if (regnum == -1 || regnum == AARCH64_V0_REGNUM + i)
++	      regcache->raw_supply (AARCH64_V0_REGNUM + i,
++				     &DARWIN_ARM64_V (state, i));
++
++	  if (regnum == -1 || regnum == AARCH64_FPSR_REGNUM)
++	    regcache->raw_supply (AARCH64_FPSR_REGNUM,
++				   &DARWIN_ARM64_FPSR (state));
++
++	  if (regnum == -1 || regnum == AARCH64_FPCR_REGNUM)
++	    regcache->raw_supply (AARCH64_FPCR_REGNUM,
++				   &DARWIN_ARM64_FPCR (state));
++	}
++    }
++}
++
++void
++aarch64_darwin_nat_target::store_registers (struct regcache *regcache,
++					     int regnum)
++{
++  thread_t thread = regcache->ptid ().tid ();
++
++  if (darwin_arm64_gpr_regnum_p (regnum))
++    {
++      arm_thread_state64_t state;
++      if (darwin_arm64_get_thread_state (thread, &state))
++	{
++	  for (int i = 0; i < 29; ++i)
++	    {
++	      int current = AARCH64_X0_REGNUM + i;
++	      if ((regnum == -1 || regnum == current)
++		  && regcache->get_register_status (current) == REG_VALID)
++		regcache->raw_collect (current, &DARWIN_ARM64_X (state, i));
++	    }
++
++	  for (int i = AARCH64_FP_REGNUM; i <= AARCH64_PC_REGNUM; ++i)
++	    if ((regnum == -1 || regnum == i)
++		&& regcache->get_register_status (i) == REG_VALID)
++	      {
++		CORE_ADDR value;
++		regcache->raw_collect (i, &value);
++		darwin_arm64_set_pointer (state, i, value);
++	      }
++
++	  if ((regnum == -1 || regnum == AARCH64_CPSR_REGNUM)
++	      && regcache->get_register_status (AARCH64_CPSR_REGNUM) == REG_VALID)
++	    regcache->raw_collect (AARCH64_CPSR_REGNUM,
++				    &DARWIN_ARM64_CPSR (state));
++
++	  darwin_arm64_set_thread_state (thread, &state);
++	}
++    }
++
++  if (darwin_arm64_fpr_regnum_p (regnum))
++    {
++      arm_neon_state64_t state;
++      if (darwin_arm64_get_neon_state (thread, &state))
++	{
++	  for (int i = 0; i < 32; ++i)
++	    {
++	      int current = AARCH64_V0_REGNUM + i;
++	      if ((regnum == -1 || regnum == current)
++		  && regcache->get_register_status (current) == REG_VALID)
++		regcache->raw_collect (current, &DARWIN_ARM64_V (state, i));
++	    }
++
++	  if ((regnum == -1 || regnum == AARCH64_FPSR_REGNUM)
++	      && regcache->get_register_status (AARCH64_FPSR_REGNUM) == REG_VALID)
++	    regcache->raw_collect (AARCH64_FPSR_REGNUM,
++				    &DARWIN_ARM64_FPSR (state));
++
++	  if ((regnum == -1 || regnum == AARCH64_FPCR_REGNUM)
++	      && regcache->get_register_status (AARCH64_FPCR_REGNUM) == REG_VALID)
++	    regcache->raw_collect (AARCH64_FPCR_REGNUM,
++				    &DARWIN_ARM64_FPCR (state));
++
++	  darwin_arm64_set_neon_state (thread, &state);
++	}
++    }
++}
++
++/* Darwin's generic event loop calls this when it needs to toggle hardware
++   single-step for one thread.  ARM64 stores the SS bit in MDSCR_EL1.  */
++
++void
++darwin_set_sstep (thread_t thread, int enable)
++{
++  arm_debug_state64_t state;
++  mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
++  kern_return_t ret = thread_get_state (thread, ARM_DEBUG_STATE64,
++					(thread_state_t) &state, &count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_get_state(ARM_DEBUG_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return;
++    }
++
++  uint64_t mdscr = DARWIN_ARM64_MDSCR (state);
++  uint64_t wanted = enable ? 1 : 0;
++  if ((mdscr & 1) == wanted)
++    return;
++
++  DARWIN_ARM64_MDSCR (state) = (mdscr & ~UINT64_C (1)) | wanted;
++  ret = thread_set_state (thread, ARM_DEBUG_STATE64,
++				 (thread_state_t) &state, count);
++  if (ret != KERN_SUCCESS)
++    warning (_("thread_set_state(ARM_DEBUG_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	     (unsigned long) thread, mach_error_string (ret));
++}
++
++void
++darwin_check_osabi (darwin_inferior *inf, thread_t thread)
++{
++  (void) inf;
++
++  if (gdbarch_osabi (current_inferior ()->arch ()) != GDB_OSABI_UNKNOWN)
++    return;
++
++  arm_thread_state64_t state;
++  if (!darwin_arm64_get_thread_state (thread, &state))
++    return;
++
++  gdbarch_info info;
++  gdbarch_info_fill (&info);
++  info.byte_order = gdbarch_byte_order (current_inferior ()->arch ());
++  info.osabi = GDB_OSABI_DARWIN;
++  info.bfd_arch_info = bfd_lookup_arch (bfd_arch_aarch64, bfd_mach_aarch64);
++  gdbarch_update_p (current_inferior (), info);
++}
++
++INIT_GDB_FILE (aarch64_darwin_nat)
++{
++  add_inf_child_target (&darwin_target);
++}
+diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
+new file mode 100644
+index 00000000000..9effc52608c
+--- /dev/null
++++ b/gdb/aarch64-darwin-tdep.c
+@@ -0,0 +1,49 @@
++/* Target-dependent code for AArch64 Darwin.
++
++   Copyright (C) 2026 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include "gdbarch.h"
++#include "osabi.h"
++#include "solib-darwin.h"
++
++static void
++aarch64_darwin_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
++{
++  (void) info;
++  set_gdbarch_make_solib_ops (gdbarch, make_darwin_solib_ops);
++}
++
++static enum gdb_osabi
++aarch64_mach_o_osabi_sniffer (bfd *abfd)
++{
++  if (!gdb_bfd_check_format (abfd, bfd_object))
++    return GDB_OSABI_UNKNOWN;
++
++  if (bfd_get_arch (abfd) == bfd_arch_aarch64)
++    return GDB_OSABI_DARWIN;
++
++  return GDB_OSABI_UNKNOWN;
++}
++
++INIT_GDB_FILE (aarch64_darwin_tdep)
++{
++  gdbarch_register_osabi_sniffer (bfd_arch_unknown, bfd_target_mach_o_flavour,
++				  aarch64_mach_o_osabi_sniffer);
++  gdbarch_register_osabi (bfd_arch_aarch64, bfd_mach_aarch64,
++				  GDB_OSABI_DARWIN, aarch64_darwin_init_abi);
++}
+diff --git a/gdb/configure.nat b/gdb/configure.nat
+index 4f5c161c854..0f705e3d407 100644
+--- a/gdb/configure.nat
++++ b/gdb/configure.nat
+@@ -149,6 +149,10 @@ case ${gdb_host} in
+ 	;;
+     darwin)
+ 	case ${gdb_host_cpu} in
++	    aarch64)
++		# Host: AArch64 running Darwin.
++		NATDEPFILES="${NATDEPFILES} aarch64-darwin-nat.o"
++		;;
+ 	    i386)
+ 		# Host: IA86 running Darwin
+ 		NATDEPFILES="${NATDEPFILES} i386-darwin-nat.o x86-nat.o \
+diff --git a/gdb/configure.tgt b/gdb/configure.tgt
+index 7313b31e42a..e2486f25b4f 100644
+--- a/gdb/configure.tgt
++++ b/gdb/configure.tgt
+@@ -155,6 +155,11 @@ aarch64*-*-linux*)
+ 			symfile-mem.o linux-record.o"
+ 	;;
+ 
++aarch64*-*-darwin*)
++	# Target: Darwin/AArch64
++	gdb_target_obs="aarch64-darwin-tdep.o solib-darwin.o"
++	;;
++
+ aarch64-*-mingw*)
+         # Target: MingW/aarch64
+ 	gdb_target_obs="aarch64-windows-tdep.o windows-tdep.o"
+@@ -782,6 +787,7 @@ gdb_target_obs="${cpu_obs} ${os_obs} ${gdb_target_obs}"
+ # in sync with that file.
+ 
+ case "${targ}" in
++aarch64*-*-darwin*)		;;
+ aarch64*-*-*)		gdb_sim=aarch64 ;;
+ avr*-*-*)		gdb_sim=avr ;;
+ bfin-*-*)		gdb_sim=bfin ;;

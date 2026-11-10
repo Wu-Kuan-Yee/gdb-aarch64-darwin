@@ -1,0 +1,514 @@
+diff --git a/gdb/aarch64-darwin-nat.c b/gdb/aarch64-darwin-nat.c
+index a50713109e1..3111f2a5cf1 100644
+--- a/gdb/aarch64-darwin-nat.c
++++ b/gdb/aarch64-darwin-nat.c
+@@ -23,8 +23,10 @@
+ #include "regcache.h"
+ #include "aarch64-tdep.h"
+ #include "arch/aarch64.h"
++#include "aarch64-nat.h"
+ #include "darwin-nat.h"
+ 
++#include <mach/arm/exception.h>
+ #include <mach/arm/thread_status.h>
+ #include <stdint.h>
+ 
+@@ -38,6 +40,11 @@
+ # define DARWIN_ARM64_V(state, index) ((state).__v[index])
+ # define DARWIN_ARM64_FPSR(state) ((state).__fpsr)
+ # define DARWIN_ARM64_FPCR(state) ((state).__fpcr)
++# define DARWIN_ARM64_FAR(state) ((state).__far)
++# define DARWIN_ARM64_BVR(state, index) ((state).__bvr[index])
++# define DARWIN_ARM64_BCR(state, index) ((state).__bcr[index])
++# define DARWIN_ARM64_WVR(state, index) ((state).__wvr[index])
++# define DARWIN_ARM64_WCR(state, index) ((state).__wcr[index])
+ # define DARWIN_ARM64_MDSCR(state) ((state).__mdscr_el1)
+ #else
+ # define DARWIN_ARM64_X(state, index) ((state).x[index])
+@@ -45,6 +52,11 @@
+ # define DARWIN_ARM64_V(state, index) ((state).q[index])
+ # define DARWIN_ARM64_FPSR(state) ((state).fpsr)
+ # define DARWIN_ARM64_FPCR(state) ((state).fpcr)
++# define DARWIN_ARM64_FAR(state) ((state).far)
++# define DARWIN_ARM64_BVR(state, index) ((state).bvr[index])
++# define DARWIN_ARM64_BCR(state, index) ((state).bcr[index])
++# define DARWIN_ARM64_WVR(state, index) ((state).wvr[index])
++# define DARWIN_ARM64_WCR(state, index) ((state).wcr[index])
+ # define DARWIN_ARM64_MDSCR(state) ((state).mdscr_el1)
+ #endif
+ 
+@@ -174,10 +186,97 @@ darwin_arm64_set_neon_state (thread_t thread, arm_neon_state64_t *state)
+   return true;
+ }
+ 
+-struct aarch64_darwin_nat_target final : public darwin_nat_target
++/* Read the exception state saved by the kernel for THREAD.  The ARM64
++   exception state contains FAR, which is the reliable full-width address
++   for a hardware watchpoint trap.  Mach's legacy exception message uses
++   32-bit integer_t values, so the address in the message itself cannot be
++   used on a 64-bit inferior.  */
++
++static bool
++darwin_arm64_get_exception_state (thread_t thread,
++				   arm_exception_state64_t *state)
++{
++  mach_msg_type_number_t count = ARM_EXCEPTION_STATE64_COUNT;
++  kern_return_t ret = thread_get_state (thread, ARM_EXCEPTION_STATE64,
++					(thread_state_t) state, &count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_get_state(ARM_EXCEPTION_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++/* Copy GDB's process-wide debug-register mirror into one Mach thread state.
++   The kernel keeps these registers per thread, while GDB's breakpoint core
++   presents them as process-wide resources.  */
++
++static void
++darwin_arm64_copy_debug_state (arm_debug_state64_t &mach_state,
++			       const aarch64_debug_reg_state &gdb_state)
++{
++  for (int i = 0; i < aarch64_num_bp_regs; ++i)
++    {
++      DARWIN_ARM64_BVR (mach_state, i) = gdb_state.dr_addr_bp[i];
++      DARWIN_ARM64_BCR (mach_state, i) = gdb_state.dr_ctrl_bp[i];
++    }
++
++  for (int i = 0; i < aarch64_num_wp_regs; ++i)
++    {
++      DARWIN_ARM64_WVR (mach_state, i) = gdb_state.dr_addr_wp[i];
++      DARWIN_ARM64_WCR (mach_state, i) = gdb_state.dr_ctrl_wp[i];
++    }
++}
++
++static bool
++darwin_arm64_install_debug_state (thread_t thread,
++				    const aarch64_debug_reg_state &gdb_state,
++				    bool single_step)
++{
++  arm_debug_state64_t state;
++  mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
++  kern_return_t ret = thread_get_state (thread, ARM_DEBUG_STATE64,
++					(thread_state_t) &state, &count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_get_state(ARM_DEBUG_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++
++  darwin_arm64_copy_debug_state (state, gdb_state);
++  uint64_t mdscr = DARWIN_ARM64_MDSCR (state);
++  DARWIN_ARM64_MDSCR (state) = (mdscr & ~UINT64_C (1))
++	| (single_step ? UINT64_C (1) : UINT64_C (0));
++
++  ret = thread_set_state (thread, ARM_DEBUG_STATE64,
++				  (thread_state_t) &state, count);
++  if (ret != KERN_SUCCESS)
++    {
++      warning (_("thread_set_state(ARM_DEBUG_STATE64) failed for "
++		 "thread 0x%lx: %s\n"),
++	       (unsigned long) thread, mach_error_string (ret));
++      return false;
++    }
++  return true;
++}
++
++struct aarch64_darwin_nat_target final
++  : public aarch64_nat_target<darwin_nat_target>
+ {
+   void fetch_registers (struct regcache *, int) override;
+   void store_registers (struct regcache *, int) override;
++  void darwin_inferior_mourned (pid_t pid) override
++  { aarch64_remove_debug_reg_state (pid); }
++
++  std::vector<CORE_ADDR> stopped_data_addresses () override;
++  bool stopped_by_watchpoint () override;
++  bool stopped_by_hw_breakpoint () override;
++  bool supports_stopped_by_hw_breakpoint () override { return true; }
++  int can_do_single_step () override { return 1; }
+ };
+ 
+ static aarch64_darwin_nat_target darwin_target;
+@@ -303,30 +402,109 @@ aarch64_darwin_nat_target::store_registers (struct regcache *regcache,
+ void
+ darwin_set_sstep (thread_t thread, int enable)
+ {
+-  arm_debug_state64_t state;
+-  mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+-  kern_return_t ret = thread_get_state (thread, ARM_DEBUG_STATE64,
+-					(thread_state_t) &state, &count);
+-  if (ret != KERN_SUCCESS)
++  const aarch64_debug_reg_state *state
++    = aarch64_lookup_debug_reg_state (inferior_ptid.pid ());
++  if (state != nullptr)
++    darwin_arm64_install_debug_state (thread, *state, enable != 0);
++  else
+     {
+-      warning (_("thread_get_state(ARM_DEBUG_STATE64) failed for "
+-		 "thread 0x%lx: %s\n"),
+-	       (unsigned long) thread, mach_error_string (ret));
+-      return;
++      arm_debug_state64_t debug_state;
++      mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
++      kern_return_t ret = thread_get_state (thread, ARM_DEBUG_STATE64,
++					     (thread_state_t) &debug_state, &count);
++      if (ret != KERN_SUCCESS)
++	return;
++      uint64_t mdscr = DARWIN_ARM64_MDSCR (debug_state);
++      DARWIN_ARM64_MDSCR (debug_state) = (mdscr & ~UINT64_C (1))
++	| (enable ? UINT64_C (1) : UINT64_C (0));
++      thread_set_state (thread, ARM_DEBUG_STATE64,
++				(thread_state_t) &debug_state, count);
+     }
++}
+ 
+-  uint64_t mdscr = DARWIN_ARM64_MDSCR (state);
+-  uint64_t wanted = enable ? 1 : 0;
+-  if ((mdscr & 1) == wanted)
++/* Implement hardware watchpoint reporting for a Mach exception.  Darwin
++   reports an ARM debug watchpoint as EXC_BAD_ACCESS/EXC_ARM_DA_DEBUG.  FAR is
++   read from the stopped thread's exception state because the generic
++   exception message stores only 32-bit integer_t values.  */
++
++std::vector<CORE_ADDR>
++aarch64_darwin_nat_target::stopped_data_addresses ()
++{
++  struct thread_info *thread = inferior_thread ();
++  if (thread == nullptr)
++    return {};
++
++  darwin_thread_info *darwin_thread = get_darwin_thread_info (thread);
++  if (darwin_thread->event.ex_type != EXC_BAD_ACCESS
++      || darwin_thread->event.data_count < 1
++      || darwin_thread->event.ex_data[0] != EXC_ARM_DA_DEBUG)
++    return {};
++
++  arm_exception_state64_t exception_state;
++  if (!darwin_arm64_get_exception_state (darwin_thread->gdb_port,
++					 &exception_state))
++    return {};
++
++  struct aarch64_debug_reg_state *state
++    = aarch64_lookup_debug_reg_state (inferior_ptid.pid ());
++  if (state == nullptr)
++    return {};
++
++  return aarch64_stopped_data_addresses (state,
++					 (CORE_ADDR) DARWIN_ARM64_FAR (exception_state));
++}
++
++bool
++aarch64_darwin_nat_target::stopped_by_watchpoint ()
++{
++  return !stopped_data_addresses ().empty ();
++}
++
++bool
++aarch64_darwin_nat_target::stopped_by_hw_breakpoint ()
++{
++  struct thread_info *thread = inferior_thread ();
++  if (thread == nullptr)
++    return false;
++
++  darwin_thread_info *darwin_thread = get_darwin_thread_info (thread);
++  if (darwin_thread->event.ex_type != EXC_BREAKPOINT
++      || darwin_thread->event.data_count < 1
++      || darwin_thread->event.ex_data[0] != EXC_ARM_BREAKPOINT)
++    return false;
++
++  struct aarch64_debug_reg_state *state
++    = aarch64_lookup_debug_reg_state (inferior_ptid.pid ());
++  return state != nullptr && aarch64_any_set_debug_regs_state (state, false);
++}
++
++/* Update the Mach copy of the process-wide debug-register mirror.  Existing
++   threads are updated immediately; a newly discovered thread receives the
++   same state in darwin_set_sstep just before it is resumed.  */
++
++void
++aarch64_notify_debug_reg_change (ptid_t ptid, int is_watchpoint,
++				 unsigned int idx)
++{
++  (void) is_watchpoint;
++  (void) idx;
++
++  aarch64_debug_reg_state *state
++    = aarch64_lookup_debug_reg_state (ptid.pid ());
++  inferior *inf = current_inferior ();
++  if (state == nullptr || inf == nullptr || inf->pid != ptid.pid ())
+     return;
+ 
+-  DARWIN_ARM64_MDSCR (state) = (mdscr & ~UINT64_C (1)) | wanted;
+-  ret = thread_set_state (thread, ARM_DEBUG_STATE64,
+-				 (thread_state_t) &state, count);
+-  if (ret != KERN_SUCCESS)
+-    warning (_("thread_set_state(ARM_DEBUG_STATE64) failed for "
+-		 "thread 0x%lx: %s\n"),
+-	     (unsigned long) thread, mach_error_string (ret));
++  darwin_inferior *darwin_inf = get_darwin_inferior (inf);
++  if (darwin_inf == nullptr)
++    return;
++
++  for (darwin_thread_t *thread : darwin_inf->threads)
++    {
++      darwin_thread_info *info = thread;
++      bool stepping = info->single_step;
++      darwin_arm64_install_debug_state (info->gdb_port, *state, stepping);
++    }
+ }
+ 
+ void
+@@ -352,4 +530,7 @@ darwin_check_osabi (darwin_inferior *inf, thread_t thread)
+ INIT_GDB_FILE (aarch64_darwin_nat)
+ {
+   add_inf_child_target (&darwin_target);
++  aarch64_initialize_hw_point ();
++  aarch64_num_bp_regs = AARCH64_HBP_MAX_NUM;
++  aarch64_num_wp_regs = AARCH64_HWP_MAX_NUM;
+ }
+diff --git a/gdb/aarch64-darwin-tdep.c b/gdb/aarch64-darwin-tdep.c
+index 9effc52608c..bb9d190d237 100644
+--- a/gdb/aarch64-darwin-tdep.c
++++ b/gdb/aarch64-darwin-tdep.c
+@@ -18,14 +18,169 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+ 
+ #include "gdbarch.h"
++#include "extract-store-integer.h"
++#include "frame.h"
++#include "arch/aarch64.h"
+ #include "osabi.h"
+ #include "solib-darwin.h"
++#include "target.h"
++#include "tramp-frame.h"
++#include "trad-frame.h"
++
++#include <mach/arm/thread_status.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <sys/ucontext.h>
++#include <sys/_types/_ucontext64.h>
++
++#if __DARWIN_UNIX03
++# define DARWIN_UCONTEXT64_TYPE struct __darwin_ucontext64
++# if __DARWIN_OPAQUE_ARM_THREAD_STATE64
++#  define DARWIN_ARM64_THREAD_FP_MEMBER __opaque_fp
++#  define DARWIN_ARM64_THREAD_LR_MEMBER __opaque_lr
++#  define DARWIN_ARM64_THREAD_SP_MEMBER __opaque_sp
++#  define DARWIN_ARM64_THREAD_PC_MEMBER __opaque_pc
++# else
++# define DARWIN_ARM64_THREAD_FP_MEMBER __fp
++# define DARWIN_ARM64_THREAD_LR_MEMBER __lr
++# define DARWIN_ARM64_THREAD_SP_MEMBER __sp
++# define DARWIN_ARM64_THREAD_PC_MEMBER __pc
++# endif
++# define DARWIN_ARM64_THREAD_CPSR_MEMBER __cpsr
++# define DARWIN_ARM64_MCONTEXT_SS_MEMBER __ss
++# define DARWIN_ARM64_MCONTEXT_NS_MEMBER __ns
++#else
++# define DARWIN_UCONTEXT64_TYPE struct ucontext64
++# if __DARWIN_OPAQUE_ARM_THREAD_STATE64
++#  define DARWIN_ARM64_THREAD_FP_MEMBER __opaque_fp
++#  define DARWIN_ARM64_THREAD_LR_MEMBER __opaque_lr
++#  define DARWIN_ARM64_THREAD_SP_MEMBER __opaque_sp
++#  define DARWIN_ARM64_THREAD_PC_MEMBER __opaque_pc
++# else
++# define DARWIN_ARM64_THREAD_FP_MEMBER fp
++# define DARWIN_ARM64_THREAD_LR_MEMBER lr
++# define DARWIN_ARM64_THREAD_SP_MEMBER sp
++# define DARWIN_ARM64_THREAD_PC_MEMBER pc
++# endif
++# define DARWIN_ARM64_THREAD_CPSR_MEMBER cpsr
++# define DARWIN_ARM64_MCONTEXT_SS_MEMBER ss
++# define DARWIN_ARM64_MCONTEXT_NS_MEMBER ns
++#endif
++
++/* The Apple ARM64 signal trampoline passes the ucontext pointer in x4
++   before calling the user handler.  The mcontext contains the same ARM
++   thread-state and NEON layouts used by thread_get_state.  */
++
++static CORE_ADDR
++aarch64_darwin_signal_mcontext (const frame_info_ptr &this_frame)
++{
++  struct gdbarch *gdbarch = get_frame_arch (this_frame);
++  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
++  CORE_ADDR ucontext
++    = get_frame_register_unsigned (this_frame, AARCH64_X0_REGNUM + 4);
++  gdb_byte buf[8];
++
++  if (target_read_memory
++      (ucontext + offsetof (DARWIN_UCONTEXT64_TYPE, uc_mcontext64),
++	       buf, sizeof buf))
++    error (_("Unable to read Darwin ARM64 signal context"));
++
++  return extract_unsigned_integer (buf, sizeof buf, byte_order);
++}
++
++static void
++aarch64_darwin_sigframe_init (const struct tramp_frame *self,
++			      const frame_info_ptr &this_frame,
++			      struct trad_frame_cache *cache,
++			      CORE_ADDR func)
++{
++  struct gdbarch *gdbarch = get_frame_arch (this_frame);
++  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
++  CORE_ADDR mcontext = aarch64_darwin_signal_mcontext (this_frame);
++  CORE_ADDR thread_state
++    = mcontext + offsetof (_STRUCT_MCONTEXT64,
++				   DARWIN_ARM64_MCONTEXT_SS_MEMBER);
++  CORE_ADDR neon_state
++    = mcontext + offsetof (_STRUCT_MCONTEXT64,
++				   DARWIN_ARM64_MCONTEXT_NS_MEMBER);
++
++  for (int i = 0; i < 29; ++i)
++    trad_frame_set_reg_addr (cache, AARCH64_X0_REGNUM + i,
++				     thread_state + i * 8);
++
++  trad_frame_set_reg_addr
++    (cache, AARCH64_FP_REGNUM,
++     thread_state + offsetof (arm_thread_state64_t,
++				      DARWIN_ARM64_THREAD_FP_MEMBER));
++  trad_frame_set_reg_addr
++    (cache, AARCH64_LR_REGNUM,
++     thread_state + offsetof (arm_thread_state64_t,
++				      DARWIN_ARM64_THREAD_LR_MEMBER));
++  trad_frame_set_reg_addr
++    (cache, AARCH64_SP_REGNUM,
++     thread_state + offsetof (arm_thread_state64_t,
++				      DARWIN_ARM64_THREAD_SP_MEMBER));
++  trad_frame_set_reg_addr
++    (cache, AARCH64_PC_REGNUM,
++     thread_state + offsetof (arm_thread_state64_t,
++				      DARWIN_ARM64_THREAD_PC_MEMBER));
++  trad_frame_set_reg_addr
++    (cache, AARCH64_CPSR_REGNUM,
++     thread_state + offsetof (arm_thread_state64_t,
++				      DARWIN_ARM64_THREAD_CPSR_MEMBER));
++
++  for (int i = 0; i < 32; ++i)
++    trad_frame_set_reg_addr (cache, AARCH64_V0_REGNUM + i,
++				     neon_state + i * 16);
++  trad_frame_set_reg_addr
++    (cache, AARCH64_FPSR_REGNUM,
++     neon_state + 32 * 16);
++  trad_frame_set_reg_addr
++    (cache, AARCH64_FPCR_REGNUM,
++     neon_state + 32 * 16 + sizeof (uint32_t));
++
++  CORE_ADDR sp = get_frame_register_unsigned (this_frame, AARCH64_SP_REGNUM);
++  trad_frame_set_id (cache, frame_id_build (sp, func));
++}
++
++static int
++aarch64_darwin_sigtramp_validate (const struct tramp_frame *self,
++				  const frame_info_ptr &this_frame,
++				  CORE_ADDR *pc)
++{
++  const char *name = nullptr;
++  CORE_ADDR start = 0;
++
++  if (!find_pc_partial_function (*pc, &name, &start, nullptr)
++      || name == nullptr
++      || (strcmp (name, "_sigtramp") != 0
++		  && strcmp (name, "__sigtramp") != 0))
++    return 0;
++
++  *pc = start;
++  return 1;
++}
++
++static const struct tramp_frame aarch64_darwin_sigframe =
++{
++  SIGTRAMP_FRAME,
++  4,
++  {
++    /* The validator identifies Apple's named __sigtramp.  The zero mask
++       deliberately avoids tying this code to one SDK's trampoline body.  */
++    {0, 0},
++    {TRAMP_SENTINEL_INSN, 0}
++  },
++  aarch64_darwin_sigframe_init,
++  aarch64_darwin_sigtramp_validate
++};
+ 
+ static void
+ aarch64_darwin_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
+ {
+   (void) info;
+   set_gdbarch_make_solib_ops (gdbarch, make_darwin_solib_ops);
++  tramp_frame_prepend_unwinder (gdbarch, &aarch64_darwin_sigframe);
+ }
+ 
+ static enum gdb_osabi
+diff --git a/gdb/configure.nat b/gdb/configure.nat
+index 0f705e3d407..f653038d971 100644
+--- a/gdb/configure.nat
++++ b/gdb/configure.nat
+@@ -151,7 +151,8 @@ case ${gdb_host} in
+ 	case ${gdb_host_cpu} in
+ 	    aarch64)
+ 		# Host: AArch64 running Darwin.
+-		NATDEPFILES="${NATDEPFILES} aarch64-darwin-nat.o"
++		NATDEPFILES="${NATDEPFILES} aarch64-nat.o \
++		nat/aarch64-hw-point.o aarch64-darwin-nat.o"
+ 		;;
+ 	    i386)
+ 		# Host: IA86 running Darwin
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index d9faf503e30..8728b4653de 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -866,6 +866,15 @@ darwin_resume_thread (struct inferior *inf, darwin_thread_t *thread,
+       break;
+ 
+     case DARWIN_RUNNING:
++      /* A thread can become known to GDB while it is already marked
++	 running.  In particular, check_new_threads can discover such a thread
++	 while the task is suspended.  Give the machine-dependent hook a chance
++	 to update per-thread state before the task is resumed.  This is also
++	 where AArch64 Darwin installs the process-wide hardware breakpoint and
++	 watchpoint mirror in the new thread.  */
++
++      darwin_set_sstep (thread->gdb_port, step);
++      thread->single_step = step;
+       break;
+ 
+     case DARWIN_STOPPED:
+@@ -1345,6 +1354,7 @@ darwin_nat_target::mourn_inferior ()
+ {
+   struct inferior *inf = current_inferior ();
+   darwin_inferior *priv = get_darwin_inferior (inf);
++  pid_t pid = inf->pid;
+   kern_return_t kret;
+   mach_port_t prev;
+ 
+@@ -1383,6 +1393,7 @@ darwin_nat_target::mourn_inferior ()
+   kret = mach_port_deallocate (gdb_task, priv->task);
+   MACH_CHECK_ERROR (kret);
+ 
++  darwin_inferior_mourned (pid);
+   inf->priv = NULL;
+ 
+   inf_child_target::mourn_inferior ();
+diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
+index 60c3adf0e67..5fc59fcb063 100644
+--- a/gdb/darwin-nat.h
++++ b/gdb/darwin-nat.h
+@@ -90,6 +90,10 @@ class darwin_nat_target : public inf_child_target
+ 
+   void mourn_inferior () override;
+ 
++  /* Let an architecture discard per-process state before the Darwin
++     inferior-private data is destroyed.  */
++  virtual void darwin_inferior_mourned (pid_t pid) {}
++
+   void kill () override;
+ 
+   void interrupt () override;
