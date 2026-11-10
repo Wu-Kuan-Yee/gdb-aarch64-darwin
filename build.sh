@@ -13,6 +13,26 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 . "${SCRIPT_DIR}/scripts/lib/common.sh"
 
 PROG=$(basename -- "$0")
+
+# --embedded is a different pipeline (static Python/Guile with their runtime
+# data bundled); hand the remaining arguments to its driver.
+_embedded_args=()
+_embedded=0
+for _arg in "$@"; do
+	if [ "${_arg}" = "--embedded" ]; then
+		_embedded=1
+	else
+		_embedded_args[${#_embedded_args[@]}]="${_arg}"
+	fi
+done
+if [ "${_embedded}" -eq 1 ]; then
+	if [ "${#_embedded_args[@]}" -gt 0 ]; then
+		exec "${SCRIPT_DIR}/scripts/build-embedded.sh" "${_embedded_args[@]}"
+	else
+		exec "${SCRIPT_DIR}/scripts/build-embedded.sh"
+	fi
+fi
+
 PREFIX=${GAD_PREFIX}
 BUILD_DIR=${GAD_BUILD_DIR}
 JOBS=${GAD_JOBS}
@@ -57,6 +77,9 @@ Options:
   --no-python        Configure without Python scripting support
   --portable         Link GMP and MPFR statically and disable Python, so the
                      installed GDB depends only on macOS system libraries
+  --embedded         Static Python and Guile with their runtime data bundled;
+                     bin/gdb is a real executable and needs only system
+                     libraries (see docs/EMBEDDED.md)
   --build-dir DIR    Build directory (default: ${BUILD_DIR})
   --clean            Remove the build directory before configuring
   --distclean        Also remove the cached source and installed tree

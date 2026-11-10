@@ -88,7 +88,18 @@ Mac, build in portable mode:
 
 This stages static GMP and MPFR archives (from Homebrew, or built from the
 pinned upstream sources when Homebrew is absent) and disables Python, so the
-installed `gdb` links only against macOS system libraries.  The build checks
+installed `gdb` links only against macOS system libraries.
+
+### Full features without third-party libraries
+
+```sh
+./build.sh --embedded
+```
+
+Python and Guile are linked as static archives and their data directories
+are installed under the prefix; `bin/gdb` is the debugger itself, not a
+launcher, and GDB finds the runtimes through a compile-time root.  See
+[EMBEDDED.md](docs/EMBEDDED.md).  The build checks
 this with `otool -L` and fails if a third-party library is still referenced.
 The trade-off is no Python scripting in the portable binary.
 

@@ -69,6 +69,7 @@ The first build downloads the upstream repository (about 600 MB).  Expect
 | `--no-python` | Configure without Python scripting support |
 | `--portable` | Static GMP/MPFR, no Python: only macOS system libraries |
 | `--latest` | Build upstream master instead of the pinned revision |
+| `--embedded` | Static Python/Guile with bundled runtime data (real `bin/gdb`) |
 | `--build-dir DIR` | Build directory, default `./build` |
 | `--clean` | Remove `build/` before configuring |
 | `--distclean` | Also remove `dist/` and `.cache/` |

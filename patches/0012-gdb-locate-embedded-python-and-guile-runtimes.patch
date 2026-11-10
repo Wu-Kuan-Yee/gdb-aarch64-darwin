@@ -1,0 +1,44 @@
+diff --git a/gdb/guile/guile.c b/gdb/guile/guile.c
+index eba71426bb0..161f035106a 100644
+--- a/gdb/guile/guile.c
++++ b/gdb/guile/guile.c
+@@ -630,6 +630,16 @@ initialize_gdb_module (void *data)
+ static void *
+ call_initialize_gdb_module (void *data)
+ {
++#ifdef GDB_EMBEDDED_ROOT
++  /* An embedded build ships the Guile Scheme sources and their compiled
++     cache inside the installation prefix.  Use only those, so the
++     interpreter never looks at the build machine's prefix.  */
++  scm_c_eval_string
++    ("(set! %load-path (cons \"" GDB_EMBEDDED_ROOT "/share/guile/3.0\" %load-path))"
++     "(set! %load-compiled-path (list \"" GDB_EMBEDDED_ROOT
++     "/lib/guile/3.0/ccache\"))");
++#endif
++
+   /* Most of the initialization is done by initialize_gdb_module.
+      It is called via scm_c_define_module so that the initialization is
+      performed within the desired module.  */
+diff --git a/gdb/python/python.c b/gdb/python/python.c
+index 5ad478cf2e3..933cd28ff09 100644
+--- a/gdb/python/python.c
++++ b/gdb/python/python.c
+@@ -2632,6 +2632,18 @@ py_initialize ()
+ 
+   PyConfig_InitPythonConfig (&config);
+   PyStatus status;
++#ifdef GDB_EMBEDDED_ROOT
++  /* An embedded build ships the Python standard library inside the
++     installation prefix.  Point the interpreter at it unless the user
++     asked for a different home.  */
++  if (getenv ("PYTHONHOME") == nullptr)
++    {
++      status = PyConfig_SetBytesString (&config, &config.home,
++					GDB_EMBEDDED_ROOT);
++      if (PyStatus_Exception (status))
++	goto init_done;
++    }
++#endif
+   if (progname_copy != nullptr)
+     {
+       status = PyConfig_SetString (&config, &config.program_name,

@@ -6,19 +6,20 @@ This document describes a build where both runtimes are linked statically
 and their data directories are shipped inside the installation prefix, so
 the debugger needs nothing outside `/usr/lib` and `/System` at run time.
 
-It is a manual recipe at the moment; `./build.sh` does not drive it yet.
+`./build.sh --embedded` drives the whole pipeline.  This document explains
+what it does and what to expect.
 
 ## What the result looks like
 
 ```text
-<prefix>/bin/gdb          launcher: sets PYTHONHOME and GUILE_LOAD_PATH
-<prefix>/bin/gdb-bin      the signed debugger, only system libraries
+<prefix>/bin/gdb          the signed debugger, only system libraries
 <prefix>/lib/python3.12/  Python 3.12.7 standard library (pruned)
 <prefix>/share/guile/3.0/ Guile 3.0 Scheme sources
+<prefix>/lib/guile/3.0/ccache/  their compiled cache (the compiler needs it)
 <prefix>/share/gdb/       GDB's own data directory
 ```
 
-`otool -L <prefix>/bin/gdb-bin` lists libSystem, libc++, libncurses,
+`otool -L <prefix>/bin/gdb` lists libSystem, libc++, libncurses,
 libexpat, libiconv, libffi and CoreFoundation only.
 
 ## Building the runtimes
@@ -45,6 +46,9 @@ and `-lffi` that the static libunistring and Guile need. GDB's configure
 also wants the `guild` variable, so put a working `guild` path in the
 `.pc`; it is only used while compiling GDB's Scheme files.
 
+`scripts/build-embedded.sh` performs these steps; the sections below are
+the implementation notes.
+
 ## Building GDB
 
 Run the normal driver with the staged prefixes and isolated pkg-config:
@@ -55,10 +59,15 @@ GAD_GMP_PREFIX=$PWD/.cache/deps/gmp \
 GAD_MPFR_PREFIX=$PWD/.cache/deps/mpfr \
 PKG_CONFIG_LIBDIR=/tmp/guile-static/lib/pkgconfig:/tmp/zstd-static/lib/pkgconfig:/usr/lib/pkgconfig \
 PKG_CONFIG_PATH=/tmp/guile-static/lib/pkgconfig:/tmp/zstd-static/lib/pkgconfig \
-CPPFLAGS="-I/tmp/xz-static/include -I/tmp/zstd-static/include" \
+CPPFLAGS="-DGDB_EMBEDDED_ROOT=\"$PREFIX\" -I/tmp/xz-static/include -I/tmp/zstd-static/include" \
 LDFLAGS="-Wl,-export_dynamic -L/tmp/xz-static/lib -L/tmp/zstd-static/lib" \
-./build.sh --latest --prefix "$PREFIX"
+./build.sh --latest --prefix "$PREFIX" --no-verify
 ```
+
+`GDB_EMBEDDED_ROOT` is what removes the launcher: patch 0012 makes the
+Python initialisation set `config.home` to it and makes Guile load both
+`<root>/share/guile/3.0` (sources) and `<root>/lib/guile/3.0/ccache`
+(compiled modules) from the prefix only.
 
 `-Wl,-export_dynamic` matters: the Python extension modules are still
 `.so` files and have to resolve `Py*` symbols from the executable.
@@ -68,25 +77,14 @@ LDFLAGS="-Wl,-export_dynamic -L/tmp/xz-static/lib -L/tmp/zstd-static/lib" \
 ```sh
 cp -a /tmp/pystatic/lib/python3.12 "$PREFIX/lib/python3.12"   # prune test/ etc.
 cp -a /opt/homebrew/share/guile/3.0 "$PREFIX/share/guile/3.0"
-mv "$PREFIX/bin/gdb" "$PREFIX/bin/gdb-bin"
-install -m 755 gdb-wrapper "$PREFIX/bin/gdb"
 ```
 
-The launcher is the only piece that knows where the data lives:
-
-```sh
-#!/bin/sh
-prefix=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 1
-export PYTHONHOME="${prefix}"
-export GUILE_LOAD_PATH="${prefix}/share/guile/3.0"
-export GUILE_LOAD_COMPILED_PATH="${prefix}/share/guile/3.0"
-exec "${prefix}/bin/gdb-bin" "$@"
-```
+No launcher is needed: `bin/gdb` is the debugger, and it locates both data
+directories from `GDB_EMBEDDED_ROOT`.
 
 ## Caveats
 
-- The launcher is a shell script; `codesign --verify` applies to
-  `bin/gdb-bin`, not to `bin/gdb`.
+- `bin/gdb` is the signed binary; there is no `gdb-bin` or wrapper.
 - Python is 3.12.7, not the Homebrew 3.15. The standard library is pruned
   (no test suite, idlelib, tkinter, lib2to3); `ssl`, `zlib`, `sqlite3`,
   `hashlib` and `lzma` work and are self-contained.
@@ -96,3 +94,5 @@ exec "${prefix}/bin/gdb-bin" "$@"
   shell. This is pre-existing behaviour, not specific to this build.
 - Rebuilding requires the staged `/tmp` prefixes above; they are build
   inputs, not runtime dependencies.
+- The installed tree is about 137 MB: 23 MB debugger, 57 MB Python
+  standard library, 6 MB Guile sources and 48 MB Guile's compiled cache.
