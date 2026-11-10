@@ -96,6 +96,21 @@ The target is hardened, is owned by another user, or is protected by SIP.
 Signing the target helps only in the first case; system binaries cannot be
 attached to without disabling SIP, which this project does not recommend.
 
+### A breakpoint in a dlopen'ed library never triggers
+
+GDB loads the shared library symbols at the first stop after `run`.  If the
+program calls `dlopen` before that, a breakpoint set on a function in the
+new library is not resolved in time.  Stop once before continuing:
+
+```text
+(gdb) start
+(gdb) break function_in_library
+(gdb) continue
+```
+
+The notifier installed at the first stop resolves the breakpoint as soon as
+the library is loaded.
+
 ### Watchpoints
 
 ARM64 provides four hardware watchpoint slots.  A fifth request fails:

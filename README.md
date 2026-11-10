@@ -157,6 +157,10 @@ upstream revision and rebuild; `patches/README.md` describes the procedure.
   than a formatted list; the types and values are still correct.
 - `gcore` and `info proc mappings` are implemented only for targets that
   support them; the Darwin target does not.
+- GDB learns the library list at the first stop.  A breakpoint on a
+  function in a library that is `dlopen`ed before the program reaches any
+  breakpoint stays pending; stop once (`start`) before continuing if a
+  library is loaded that early.
 - Attaching to hardened processes owned by other users is refused by macOS
   regardless of entitlements.
 - The port is a patch series, not an upstream submission; behaviour may
