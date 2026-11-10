@@ -8,12 +8,15 @@
 SHELL := /bin/bash
 ARGS ?=
 
-.PHONY: all build sign verify test doctor env clean distclean help
+.PHONY: all build portable sign verify test doctor env clean distclean help
 
 all: build
 
 build:
 	./build.sh $(ARGS)
+
+portable:
+	./build.sh --portable $(ARGS)
 
 sign:
 	./scripts/sign.sh $(ARGS)
@@ -38,6 +41,7 @@ help:
 		'gdb-aarch64-darwin' \
 		'' \
 		'  make build       build, install and verify GDB' \
+		'  make portable    self-contained build (static GMP/MPFR, no Python)' \
 		'  make verify      run the smoke test against an existing install' \
 		'  make sign        re-sign the installed GDB' \
 		'  make doctor      check the toolchain, libraries and identity' \
