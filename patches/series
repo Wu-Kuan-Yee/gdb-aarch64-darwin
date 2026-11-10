@@ -1,5 +1,5 @@
 0001-gdb-add-aarch64-darwin-native-target.patch
-0002-bfd-recognize-apple-dwarf5-macho-sections.patch
+0002-gdb-report-the-missing-debug-section-correctly.patch
 0003-gdb-complete-aarch64-darwin-native-backend.patch
 0004-gdb-use-darwin-arm64-signal-context.patch
 0005-gdb-sign-darwin-debugger-with-entitlements.patch

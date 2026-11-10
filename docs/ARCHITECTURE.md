@@ -53,13 +53,16 @@ bookkeeping and the dyld symbol reader are reused as they are.
 
 Without this patch nothing else is compiled.
 
-### 0002 — read DWARF 5 from Mach-O
+### 0002 — the missing string-offsets diagnostic
 
-Apple's toolchain emits DWARF 5 sections with Apple-specific names and
-flags.  `bfd/mach-o.c` learns the section names, and `gdb/dwarf2/read.c`
-accepts the resulting section layout.  Debug information from a normal
-`cc -g` build then loads with line numbers instead of producing a file
-without symbols.
+`read_str_index` has two error paths: one for a missing string section and
+one for a missing string-offsets section.  The second one reported the
+*string* section's name, which sends anyone reading the message looking in
+the wrong place when a Mach-O file has DWARF 5 but a stripped
+`__debug_str_offs`.  The patch reports the section that is actually
+missing.  The Mach-O DWARF 5 section-name table that earlier versions of
+this series carried was added upstream in the meantime and is no longer
+patched.
 
 ### 0003 — the native backend
 

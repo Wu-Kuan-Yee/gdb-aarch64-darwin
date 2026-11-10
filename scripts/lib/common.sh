@@ -19,7 +19,7 @@ readonly GAD_ROOT
 # object name: abbreviated names are resolved differently by different git
 # versions once the upstream history grows.
 UPSTREAM_URL=${GAD_UPSTREAM_URL:-https://sourceware.org/git/binutils-gdb.git}
-UPSTREAM_REV=${GAD_UPSTREAM_REV:-7e7dd6cfcf60cda2506d19d88ff98622bf670dbd}
+UPSTREAM_REV=${GAD_UPSTREAM_REV:-0936740e29aab201a1e0443180c52dbe0b2e0816}
 
 # Where things go.  Every path can be overridden from the environment, and the
 # command line options of the individual scripts take precedence over both.

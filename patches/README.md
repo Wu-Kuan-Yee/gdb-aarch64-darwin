@@ -8,7 +8,7 @@ revision and are applied in the order listed in `series` with
 | Patch | Upstream area | Purpose |
 | --- | --- | --- |
 | `0001` | `configure`, `gdb/configure.tgt`, `gdb/configure.nat` | Build GDB for `aarch64-*-darwin*` and register a native target |
-| `0002` | `bfd/mach-o.c`, `gdb/dwarf2/read.c` | Read DWARF 5 sections from Apple Mach-O objects |
+| `0002` | `gdb/dwarf2/read.c` | Report the missing string-offsets section instead of the string section |
 | `0003` | `gdb/aarch64-darwin-nat.c`, `gdb/aarch64-darwin-tdep.c` | Complete the native backend: registers, threads, stepping, solibs |
 | `0004` | `gdb/aarch64-darwin-tdep.c` | Take the PC from the Darwin ARM64 signal context on frame unwinding |
 | `0005` | `gdb/Makefile.in`, `gdb/darwin-nat.c` | Sign the debugger with `com.apple.security.cs.debugger` at build time |

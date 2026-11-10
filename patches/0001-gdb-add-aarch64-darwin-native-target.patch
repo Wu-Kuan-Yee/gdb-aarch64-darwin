@@ -494,8 +494,8 @@ index 7313b31e42a..e2486f25b4f 100644
 +	gdb_target_obs="aarch64-darwin-tdep.o solib-darwin.o"
 +	;;
 +
- aarch64-*-mingw*)
-         # Target: MingW/aarch64
+ aarch64-*-mingw* | aarch64-*-windows*)
+         # Target: Windows/aarch64
  	gdb_target_obs="aarch64-windows-tdep.o windows-tdep.o"
 @@ -782,6 +787,7 @@ gdb_target_obs="${cpu_obs} ${os_obs} ${gdb_target_obs}"
  # in sync with that file.

@@ -1,0 +1,12 @@
+diff --git a/gdb/dwarf2/read.c b/gdb/dwarf2/read.c
+--- a/gdb/dwarf2/read.c
++++ b/gdb/dwarf2/read.c
+@@ -14756,7 +14756,7 @@
+   if (str_offsets_section->buffer == NULL)
+     error (_("%s used without %s section"
+ 	     " in CU at offset %s [in module %s]"),
+-	   form_name, str_section->get_name (),
++	   form_name, str_offsets_section->get_name (),
+ 	   sect_offset_str (cu->header.sect_off), objf_name);
+ 
+   ULONGEST str_offsets_offset = str_offsets_base + str_index * offset_size;
