@@ -183,12 +183,19 @@ run_logged()
 	fi
 }
 
+# Compare the configuration actually recorded by configure against the current
+# prefix and source directory.  config.status --config prints the original
+# arguments; its own variables are not a reliable record (srcdir is stored
+# relative or with symlinks resolved).
 config_is_current()
 {
-	local config="${BUILD_DIR}/config.status"
+	local config="${BUILD_DIR}/config.status" args prefix_real source_real
 	[ -f "${config}" ] || return 1
-	grep -Fq -- "prefix=${PREFIX}" "${config}" || return 1
-	grep -Fq -- "srcdir=${SOURCE_DIR}" "${config}" || return 1
+	args=$(cd -- "${BUILD_DIR}" && sh ./config.status --config 2>/dev/null) || return 1
+	prefix_real=$(cd -- "${PREFIX}" 2>/dev/null && pwd -P) || prefix_real=${PREFIX}
+	source_real=$(cd -- "${SOURCE_DIR}" 2>/dev/null && pwd -P) || source_real=${SOURCE_DIR}
+	printf '%s' "${args}" | grep -Fq -- "--prefix=${prefix_real}" || return 1
+	printf '%s' "${args}" | grep -Fq -- "--srcdir=${source_real}" || return 1
 	return 0
 }
 
@@ -286,6 +293,7 @@ else
 	SOURCE_DIR=$("${SCRIPT_DIR}/scripts/bootstrap.sh")
 fi
 [ -n "${SOURCE_DIR}" ] || die "bootstrap did not return a source directory"
+SOURCE_DIR=$(cd -- "${SOURCE_DIR}" && pwd -P) || die "cannot resolve source directory: ${SOURCE_DIR}"
 ok "source: ${SOURCE_DIR}"
 
 CONFIGURE_ARGS=(
