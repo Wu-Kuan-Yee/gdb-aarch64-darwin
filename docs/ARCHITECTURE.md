@@ -113,6 +113,19 @@ built binary from being completely unusable if someone runs it before
 signing, and it documents the entitlement requirement next to the code that
 needs it.
 
+### 0007 — thread port notifications
+
+`MACH_NOTIFY_DEAD_NAME` is sent for thread ports as well as for the task
+port.  The Darwin layer treated every such notification as a process exit and
+called `wait4` without `WNOHANG`, so when a thread died while the inferior was
+still running, GDB blocked in the kernel forever: no output, no error, and a
+debugger that never reached the first breakpoint.
+
+The fix polls with `WNOHANG | WUNTRACED` and ignores a notification that does
+not correspond to a reaped or stopped child.  The task port notification is
+still delivered when the process really exits, so exit status reporting is
+unchanged.
+
 ### 0006 — hardware watchpoints
 
 The ARM64 debug registers provide four watchpoint slots.  This patch:

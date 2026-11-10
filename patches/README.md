@@ -13,6 +13,7 @@ revision and are applied in the order listed in `series` with
 | `0004` | `gdb/aarch64-darwin-tdep.c` | Take the PC from the Darwin ARM64 signal context on frame unwinding |
 | `0005` | `gdb/Makefile.in`, `gdb/darwin-nat.c` | Sign the debugger with `com.apple.security.cs.debugger` at build time |
 | `0006` | `gdb/aarch64-darwin-nat.c`, `gdb/aarch64-nat.c` | Program the four ARM64 hardware watchpoint slots and report the faulting address |
+| `0007` | `gdb/darwin-nat.c` | Do not block reaping a child when a thread port dies while the inferior is still running |
 
 ## Keeping the series current
 

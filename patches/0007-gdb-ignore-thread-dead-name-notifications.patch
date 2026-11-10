@@ -1,0 +1,20 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -1110,7 +1110,15 @@
+ 	      pid_t res_pid;
+ 	      int wstatus;
+ 
+-	      res_pid = wait4 (inf->pid, &wstatus, 0, NULL);
++	      res_pid = wait4 (inf->pid, &wstatus, WNOHANG | WUNTRACED, NULL);
++	      if (res_pid == 0)
++		{
++		  /* The dead-name notification was for a thread port, not for
++		     the task port: the inferior is still running.  Do not block
++		     here waiting for an exit that has not happened.  */
++		  status->set_ignore ();
++		  return minus_one_ptid;
++		}
+ 	      if (res_pid < 0 || res_pid != inf->pid)
+ 		{
+ 		  warning (_("wait4: res=%d: %s\n"),

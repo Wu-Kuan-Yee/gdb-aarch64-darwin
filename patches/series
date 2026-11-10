@@ -4,3 +4,4 @@
 0004-gdb-use-darwin-arm64-signal-context.patch
 0005-gdb-sign-darwin-debugger-with-entitlements.patch
 0006-gdb-fix-aarch64-darwin-hardware-watchpoints.patch
+0007-gdb-ignore-thread-dead-name-notifications.patch
