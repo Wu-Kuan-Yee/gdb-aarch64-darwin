@@ -29,9 +29,14 @@ The smoke test in `tests/` exercises these on every build:
 | Register access (general purpose, `pc`, `sp`, NEON) | works |
 | Hardware watchpoints (four ARM64 slots) | works |
 | Thread listing and per-thread registers | works |
-| Shared library (dyld) symbol loading | works |
-| `gdb -p PID` attach | requires signing the target, see [docs/SIGNING.md](docs/SIGNING.md) |
-| Core dumps | not tested |
+| Shared libraries, including `dlopen` and breakpoints inside them | works |
+| Backtraces across signal handlers | works |
+| `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
+| C++ types, virtual dispatch, method arguments | works |
+| Python scripting | works when a Python with development headers is installed |
+| Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
+| `info proc mappings` | not supported by the Darwin target |
+| Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |
 | `gdbstub` / remote debugging | not implemented by the upstream Darwin layer |
 
 ## Requirements
@@ -41,6 +46,9 @@ The smoke test in `tests/` exercises these on every build:
 - Homebrew `gmp` and `mpfr`
 - A code signing identity with a private key (an Apple Development
   certificate from a free Apple ID is enough)
+- Optional: a Python with development headers (for example Homebrew
+  `python`), which enables Python scripting in GDB.  The build detects it
+  and configures `--without-python` cleanly when it is absent.
 
 The build refuses to start without a signing identity, because a GDB that
 is only ad hoc signed blocks in `taskgated` the moment it starts an inferior.
@@ -140,6 +148,15 @@ upstream revision and rebuild; `patches/README.md` describes the procedure.
   not available.
 - Hardware watchpoints are limited to the four ARM64 debug registers.
   GDB reports an error when a fifth is requested.
+- macOS keeps its system libraries in the dyld shared cache, with no file
+  on disk.  Debugging *inside* those libraries is therefore not possible:
+  frames in libsystem show no line information and sometimes cannot be
+  unwound.  User libraries and programs are unaffected.
+- The standard C++ library on macOS is libc++, for which GDB has no pretty
+  printers.  `print vector` shows the container's internal fields rather
+  than a formatted list; the types and values are still correct.
+- `gcore` and `info proc mappings` are implemented only for targets that
+  support them; the Darwin target does not.
 - Attaching to hardened processes owned by other users is refused by macOS
   regardless of entitlements.
 - The port is a patch series, not an upstream submission; behaviour may

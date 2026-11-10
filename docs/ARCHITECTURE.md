@@ -137,6 +137,48 @@ not correspond to a reaped or stopped child.  The task port notification is
 still delivered when the process really exits, so exit status reporting is
 unchanged.
 
+### 0008 — shared libraries on current macOS
+
+Four related problems, all caused by dyld behaviour that changed after the
+Darwin backend was written:
+
+- `DYLD_VERSION_MAX` was 15, while current macOS reports version 17.
+  `create_inferior_hook` treated that as unknown and returned before loading
+  a single library.  The version check now accepts any published version and
+  warns when it is newer than the layout GDB knows about.
+- dyld publishes `dyld_all_image_infos` after the initial exec stop.  The
+  first read therefore saw `version = 17, count = 0` and a notifier field
+  that was not yet a valid address.  GDB now refreshes the structure at the
+  first real stop, installs the notifier and calls `solib_add` while the
+  inferior is stopped.
+- Libraries in the dyld shared cache have no file on disk.  Opening each
+  one produced an error per library; the loader now skips them.
+- The notifier breakpoint is only installed once the image list exists, so
+  no breakpoint is written at a meaningless address.
+
+### 0009 — Clang's implicit object pointer
+
+Clang emits `DW_AT_object_pointer` with `DW_FORM_implicit_const` on member
+function *declarations*, where no DIE exists for the artificial `this`
+parameter.  `read_subroutine_type` followed the attribute as if it were a
+reference and hit a `gdb_assert` in `get_section_for_ref`, aborting on any
+C++ program with virtual functions.  The attribute is now only followed for
+reference forms; the implicit constant is interpreted as "the object
+pointer is the first parameter", which is what it means.  The assertion is
+replaced by a diagnostic error so a malformed object file cannot crash the
+debugger.
+
+### 0010 — signal frames without library symbols
+
+The signal trampoline unwinder recognised `_sigtramp` by symbol name, but
+the system libraries are in the shared cache and have no symbols, so the
+check never matched and `bt` from a signal handler produced garbage.  The
+validator now also accepts a frame when the ucontext pointer that the kernel
+leaves in `x20` passes a structural check (readable mcontext, plausible
+stack pointer and program counter) and the return address is outside the
+program being debugged.  `bt` now shows the handler, `<signal handler
+called>` and the interrupted frame.
+
 ## Capability matrix
 
 | Feature | Mechanism | Notes |
@@ -146,7 +188,7 @@ unchanged.
 | Watchpoints | `wvr`/`wcr`, four slots | fifth request fails with a GDB error |
 | Registers | `thread_get_state` | GPR, `pc`, `sp`, NEON, `fpsr`, `fpcr` |
 | Backtraces | DWARF CFI plus signal trampoline unwinder | |
-| Shared libraries | `solib-darwin.c` | dyld notifications |
+| Shared libraries | `solib-darwin.c` | dyld image list, refreshed after startup |
 | Threads | Mach thread ports | `info threads`, per-thread registers |
 | Attach | `task_for_pid` | target must allow it |
 
