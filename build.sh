@@ -335,15 +335,34 @@ else
 	ok "configure results are current"
 fi
 
+# Building the whole gdb target also builds bfd, whose info manual needs
+# makeinfo.  Texinfo is not otherwise required, so tell make to skip the
+# manual instead of failing the build when it is absent.
+MAKE_DOC_ARGS=()
+if ! have makeinfo; then
+	warn "makeinfo not found; skipping the generated manuals"
+	MAKE_DOC_ARGS[${#MAKE_DOC_ARGS[@]}]=MAKEINFO=true
+fi
+
 step "building GDB (this takes several minutes)"
-run_logged "${BUILD_DIR}/build.log" \
-	make -C "${BUILD_DIR}" -j "${JOBS}" all-gdb
+if [ "${#MAKE_DOC_ARGS[@]}" -gt 0 ]; then
+	run_logged "${BUILD_DIR}/build.log" \
+		make -C "${BUILD_DIR}" -j "${JOBS}" "${MAKE_DOC_ARGS[@]}" all-gdb
+else
+	run_logged "${BUILD_DIR}/build.log" \
+		make -C "${BUILD_DIR}" -j "${JOBS}" all-gdb
+fi
 ok "compiled"
 
 step "installing into ${PREFIX}"
 run mkdir -p -- "${PREFIX}"
-run_logged "${BUILD_DIR}/install.log" \
-	make -C "${BUILD_DIR}" -j "${JOBS}" install-gdb
+if [ "${#MAKE_DOC_ARGS[@]}" -gt 0 ]; then
+	run_logged "${BUILD_DIR}/install.log" \
+		make -C "${BUILD_DIR}" -j "${JOBS}" "${MAKE_DOC_ARGS[@]}" install-gdb
+else
+	run_logged "${BUILD_DIR}/install.log" \
+		make -C "${BUILD_DIR}" -j "${JOBS}" install-gdb
+fi
 
 INSTALLED_GDB="${PREFIX}/bin/gdb"
 if [ "${GAD_DRY_RUN}" -eq 0 ]; then

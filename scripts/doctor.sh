@@ -176,6 +176,9 @@ check_tools()
 		fi
 	done
 	[ "${missing}" -eq 0 ] && pass "all required build tools are present"
+	if ! have makeinfo; then
+		note "makeinfo is missing; the build will skip the generated manuals"
+	fi
 	true
 }
 
