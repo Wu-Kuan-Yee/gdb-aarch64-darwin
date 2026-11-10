@@ -155,6 +155,11 @@ done
 
 [ "$#" -eq 0 ] || die "unexpected argument: $1"
 
+if [ "${DO_SIGN}" -eq 0 ] && [ "${DO_VERIFY}" -eq 1 ]; then
+	warn "the smoke test needs a signed GDB; skipping it because --no-sign was given"
+	DO_VERIFY=0
+fi
+
 on_interrupt()
 {
 	printf '\n' >&2
