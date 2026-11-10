@@ -113,6 +113,17 @@ built binary from being completely unusable if someone runs it before
 signing, and it documents the entitlement requirement next to the code that
 needs it.
 
+### 0006 — hardware watchpoints
+
+The ARM64 debug registers provide four watchpoint slots.  This patch:
+
+- installs the watchpoint values and control registers, and clears the
+  slots that are no longer in use;
+- reads the fault address from the exception state, because the legacy
+  exception message truncates it to 32 bits;
+- reports whether the stop was caused by a watchpoint, a hardware
+  breakpoint, or something else, so GDB prints the right stop reason.
+
 ### 0007 — thread port notifications
 
 `MACH_NOTIFY_DEAD_NAME` is sent for thread ports as well as for the task
@@ -125,17 +136,6 @@ The fix polls with `WNOHANG | WUNTRACED` and ignores a notification that does
 not correspond to a reaped or stopped child.  The task port notification is
 still delivered when the process really exits, so exit status reporting is
 unchanged.
-
-### 0006 — hardware watchpoints
-
-The ARM64 debug registers provide four watchpoint slots.  This patch:
-
-- installs the watchpoint values and control registers, and clears the
-  slots that are no longer in use;
-- reads the fault address from the exception state, because the legacy
-  exception message truncates it to 32 bits;
-- reports whether the stop was caused by a watchpoint, a hardware
-  breakpoint, or something else, so GDB prints the right stop reason.
 
 ## Capability matrix
 
