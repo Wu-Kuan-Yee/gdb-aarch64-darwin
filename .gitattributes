@@ -1,0 +1,19 @@
+# Normalise line endings in the repository; the scripts are POSIX shell and
+# must keep LF endings even when checked out on a machine with core.autocrlf.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.patch text eol=lf
+*.plist text eol=lf
+*.md text eol=lf
+*.c text eol=lf
+*.gdb text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Keep binary assets out of end-of-line conversion.
+*.png binary
+*.jpg binary
+*.gz binary
+*.zst binary

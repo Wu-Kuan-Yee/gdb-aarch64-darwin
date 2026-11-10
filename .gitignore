@@ -1,0 +1,20 @@
+# Build products and the installation prefix produced by ./build.sh.
+/build/
+/dist/
+
+# Cached upstream checkout.  Remove with `./build.sh --distclean`.
+/.cache/
+
+# Build and test logs.
+*.log
+
+# macOS metadata.
+.DS_Store
+._*
+
+# Editor and tooling state.
+.idea/
+.vscode/
+*.swp
+*~
+compile_commands.json
