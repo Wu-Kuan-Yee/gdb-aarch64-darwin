@@ -4,13 +4,13 @@
 
 *.sh text eol=lf
 *.patch text eol=lf
+*.diff text eol=lf
 *.plist text eol=lf
 *.md text eol=lf
 *.c text eol=lf
 *.gdb text eol=lf
 Makefile text eol=lf
-.gitignore text eol=lf
-.gitattributes text eol=lf
+
 
 # Keep binary assets out of end-of-line conversion.
 *.png binary
