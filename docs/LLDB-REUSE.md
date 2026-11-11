@@ -69,13 +69,24 @@ shared-cache support and private dyld entry points, then loads images from
 the cache with `ObjectFileMachO`.  The cache-format knowledge is spread
 across those layers and is tied to LLDB's Host abstractions.
 
-A GDB implementation is still possible, but it means writing the parser:
-read `/System/Library/dyld/dyld_shared_cache_arm64e` (plus subcaches),
-parse `dyld_cache_header`, mappings and images, resolve each image's Mach-O
-header inside the cache, read its `__LINKEDIT`, and build symbols from the
-local-symbols table and export trie.  This must cope with OS-version
-changes and with the shared cache being the only copy of system libraries.
-Estimated effort: several weeks.
+A GDB parser now exists (patch 0022, `darwin-shared-cache`).  It finds
+the cache under `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld`
+or `/System/Library/dyld`, parses the header, follows the 32-byte
+subcache suffixes (`.25.dylddata`, `.81.dyldlinkedit`, ...), and reports
+mappings and images:
+
+```text
+Shared cache: .../dyld_shared_cache_arm64e
+  uuid: b411828b445038e3973aafe7b7b5bef5
+  files: 82, mappings: 103, images: 4115, local symbols: 0
+  0x1805a5000  /usr/lib/system/libsystem_c.dylib
+```
+
+The release cache on this macOS has `localSymbolsOffset == 0` for every
+file: local symbols are stripped.  Symbol names therefore have to come
+from each image's export trie (`LC_DYLD_EXPORTS_TRIE` in its `__LINKEDIT`),
+which is the next piece of work; that also provides the addresses needed
+to load minimal symbols for the cached libraries.
 
 ## Early dlopen
 

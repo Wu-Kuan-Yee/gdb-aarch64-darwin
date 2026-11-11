@@ -19,3 +19,4 @@
 0019-gdb-switch-threads-when-writing-cores.patch
 0020-gdb-use-cooked-register-reads-for-cores.patch
 0021-gdb-dump-thread-state-from-mach.patch
+0022-gdb-parse-the-dyld-shared-cache.patch

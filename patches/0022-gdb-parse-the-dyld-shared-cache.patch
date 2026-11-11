@@ -1,0 +1,286 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 30f9dc9b2db..eb7cacf14d8 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3181,6 +3181,269 @@ darwin_nat_target::supports_multi_process ()
+   return true;
+ }
+ 
++
++/* Minimal reader for dyld's shared cache.  The on-disk layout is the
++   interface documented by Apple's dyld_cache_format.h; only the fields
++   needed to enumerate mappings, images and local symbols are mirrored
++   here.  */
++
++struct darwin_dsc_header
++{
++  char magic[16];
++  uint32_t mappingOffset;
++  uint32_t mappingCount;
++  uint32_t imagesOffsetOld;
++  uint32_t imagesCountOld;
++  uint64_t dyldBaseAddress;
++  uint64_t codeSignatureOffset;
++  uint64_t codeSignatureSize;
++  uint64_t slideInfoOffsetUnused;
++  uint64_t slideInfoSizeUnused;
++  uint64_t localSymbolsOffset;
++  uint64_t localSymbolsSize;
++  uint8_t uuid[16];
++  uint64_t cacheType;
++  uint32_t branchPoolsOffset;
++  uint32_t branchPoolsCount;
++  uint64_t dyldInCacheMH;
++  uint64_t dyldInCacheEntry;
++  uint64_t imagesTextOffset;
++  uint64_t imagesTextCount;
++  uint64_t patchInfoAddr;
++  uint64_t patchInfoSize;
++  uint64_t otherImageGroupAddrUnused;
++  uint64_t otherImageGroupSizeUnused;
++  uint64_t progClosuresAddr;
++  uint64_t progClosuresSize;
++  uint64_t progClosuresTrieAddr;
++  uint64_t progClosuresTrieSize;
++  uint32_t platform;
++  uint32_t formatVersionAndFlags;
++  uint64_t sharedRegionStart;
++  uint64_t sharedRegionSize;
++  uint64_t maxSlide;
++  uint64_t dylibsImageArrayAddr;
++  uint64_t dylibsImageArraySize;
++  uint64_t dylibsTrieAddr;
++  uint64_t dylibsTrieSize;
++  uint64_t otherImageArrayAddr;
++  uint64_t otherImageArraySize;
++  uint64_t otherTrieAddr;
++  uint64_t otherTrieSize;
++  uint32_t mappingWithSlideOffset;
++  uint32_t mappingWithSlideCount;
++  uint64_t dylibsPBLStateArrayAddrUnused;
++  uint64_t dylibsPBLSetAddr;
++  uint64_t programsPBLSetPoolAddr;
++  uint64_t programsPBLSetPoolSize;
++  uint64_t programTrieAddr;
++  uint32_t programTrieSize;
++  uint32_t osVersion;
++  uint32_t altPlatform;
++  uint32_t altOsVersion;
++  uint64_t swiftOptsOffset;
++  uint64_t swiftOptsSize;
++  uint32_t subCacheArrayOffset;
++  uint32_t subCacheArrayCount;
++  uint8_t symbolFileUUID[16];
++  uint64_t rosettaReadOnlyAddr;
++  uint64_t rosettaReadOnlySize;
++  uint64_t rosettaReadWriteAddr;
++  uint64_t rosettaReadWriteSize;
++  uint32_t imagesOffset;
++  uint32_t imagesCount;
++};
++
++struct darwin_dsc_mapping
++{
++  uint64_t address;
++  uint64_t size;
++  uint64_t fileOffset;
++  uint32_t maxProt;
++  uint32_t initProt;
++};
++
++struct darwin_dsc_image
++{
++  uint64_t address;
++  uint64_t modTime;
++  uint64_t inode;
++  uint32_t pathFileOffset;
++  uint32_t pad;
++};
++
++struct darwin_dsc_local_info
++{
++  uint32_t nlistOffset;
++  uint32_t nlistCount;
++  uint32_t stringsOffset;
++  uint32_t stringsSize;
++  uint32_t entriesOffset;
++  uint32_t entriesCount;
++};
++
++struct darwin_dsc_entry
++{
++  uint32_t dylibOffset;
++  uint32_t nlistStartIndex;
++  uint32_t nlistCount;
++};
++
++struct darwin_dsc_state
++{
++  std::vector<std::string> files;
++  std::vector<darwin_dsc_mapping> mappings;
++  std::vector<std::pair<uint64_t, std::string>> images;
++  uint64_t nlist_count = 0;
++  std::string uuid;
++};
++
++static void
++darwin_dsc_parse (const std::string &path, darwin_dsc_state &state, int depth)
++{
++  int fd = open (path.c_str (), O_RDONLY);
++  if (fd < 0)
++    return;
++
++  struct stat st;
++  if (fstat (fd, &st) != 0 || (size_t) st.st_size < sizeof (darwin_dsc_header))
++    {
++      close (fd);
++      return;
++    }
++
++  void *map = mmap (nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
++  close (fd);
++  if (map == MAP_FAILED)
++    return;
++
++  const gdb_byte *data = (const gdb_byte *) map;
++  size_t size = st.st_size;
++  const auto *h = (const darwin_dsc_header *) data;
++
++  if (memcmp (h->magic, "dyld_v1", 7) != 0)
++    {
++      munmap (map, size);
++      return;
++    }
++
++  state.files.push_back (path);
++
++  if (depth == 0)
++    {
++      char buf[40];
++      for (int i = 0; i < 16; i++)
++	xsnprintf (buf + 2 * i, 3, "%02x", h->uuid[i]);
++      state.uuid = buf;
++    }
++
++  if (h->mappingOffset != 0
++      && h->mappingOffset + h->mappingCount * sizeof (darwin_dsc_mapping) <= size)
++    {
++      const auto *m = (const darwin_dsc_mapping *) (data + h->mappingOffset);
++      for (uint32_t i = 0; i < h->mappingCount; i++)
++	state.mappings.push_back (m[i]);
++    }
++
++  if (h->imagesOffset != 0 && h->imagesCount != 0
++      && h->imagesOffset + h->imagesCount * sizeof (darwin_dsc_image) <= size)
++    {
++      const auto *im = (const darwin_dsc_image *) (data + h->imagesOffset);
++      for (uint32_t i = 0; i < h->imagesCount; i++)
++	{
++	  if (im[i].pathFileOffset >= size)
++	    continue;
++	  const char *name = (const char *) data + im[i].pathFileOffset;
++	  size_t maxlen = size - im[i].pathFileOffset;
++	  size_t len = strnlen (name, maxlen);
++	  if (len == maxlen)
++	    continue;
++	  state.images.emplace_back (im[i].address, std::string (name, len));
++	}
++    }
++
++  if (h->localSymbolsOffset != 0
++      && h->localSymbolsOffset + sizeof (darwin_dsc_local_info) <= size)
++    {
++      const auto *li
++	= (const darwin_dsc_local_info *) (data + h->localSymbolsOffset);
++      if (h->localSymbolsOffset + sizeof (darwin_dsc_local_info) <= size
++	  && li->nlistCount < (1u << 28))
++	state.nlist_count += li->nlistCount;
++    }
++
++  if (depth == 0 && h->subCacheArrayOffset != 0
++      && h->subCacheArrayCount != 0)
++    {
++      /* Newer caches use dyld_subcache_entry with a 32-byte file suffix;
++	 older ones only have the uuid and vm offset.  */
++      bool with_suffix
++	= (h->subCacheArrayOffset + h->subCacheArrayCount * 56 <= size
++	   && data[h->subCacheArrayOffset + 24] == '.');
++      size_t entry_size = with_suffix ? 56 : 24;
++
++      for (uint32_t i = 0; i < h->subCacheArrayCount; i++)
++	{
++	  std::string sub;
++	  if (with_suffix)
++	    {
++	      const char *suffix
++		= (const char *) data + h->subCacheArrayOffset
++		  + i * entry_size + 24;
++	      size_t len = strnlen (suffix, 32);
++	      if (len == 0 || len == 32)
++		continue;
++	      sub = path + std::string (suffix, len);
++	    }
++	  else
++	    sub = string_printf ("%s.%02u", path.c_str (), i + 1);
++
++	  if (access (sub.c_str (), R_OK) == 0)
++	    darwin_dsc_parse (sub, state, depth + 1);
++	}
++    }
++
++  munmap (map, size);
++}
++
++static void
++darwin_shared_cache_command (const char *args, int from_tty)
++{
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++
++  darwin_dsc_parse (base, state, 0);
++  if (state.files.empty ())
++    error (_("cannot read the dyld shared cache"));
++
++  gdb_printf (_("Shared cache: %s\n"), base.c_str ());
++  gdb_printf (_("  uuid: %s\n"), state.uuid.c_str ());
++  gdb_printf (_("  files: %zu, mappings: %zu, images: %zu, local symbols: %llu\n"),
++	      state.files.size (), state.mappings.size (),
++	      state.images.size (),
++	      (unsigned long long) state.nlist_count);
++
++  const char *filter = (args != nullptr && *args != '\0') ? args : nullptr;
++  size_t shown = 0;
++  for (const auto &img : state.images)
++    {
++      if (filter != nullptr && img.second.find (filter) == std::string::npos)
++	continue;
++      gdb_printf ("  %s  %s\n",
++		  hex_string (img.first), img.second.c_str ());
++      if (++shown == 40)
++	{
++	  gdb_printf (_("  ...\n"));
++	  break;
++	}
++    }
++}
++
+ INIT_GDB_FILE (darwin_nat)
+ {
+   kern_return_t kret;
+@@ -3215,6 +3478,11 @@ the first non-system image added by dyld, so that pending breakpoints can be\n\
+ resolved before a constructor calls into the newly loaded library."),
+ 			   NULL, NULL, &setlist, &showlist);
+ 
++  add_cmd ("darwin-shared-cache", class_info, darwin_shared_cache_command,
++	   _("Print the dyld shared cache images and symbol counts.\n\
++With an argument, only images whose path contains it are shown."),
++	   &cmdlist);
++
+   add_setshow_boolean_cmd ("mach-exceptions", class_support,
+ 			   &enable_mach_exceptions, _("\
+ Set if mach exceptions are caught."), _("\
