@@ -20,3 +20,4 @@
 0020-gdb-use-cooked-register-reads-for-cores.patch
 0021-gdb-dump-thread-state-from-mach.patch
 0022-gdb-parse-the-dyld-shared-cache.patch
+0023-gdb-read-shared-cache-export-tries.patch

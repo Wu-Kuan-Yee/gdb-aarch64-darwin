@@ -84,9 +84,21 @@ Shared cache: .../dyld_shared_cache_arm64e
 
 The release cache on this macOS has `localSymbolsOffset == 0` for every
 file: local symbols are stripped.  Symbol names therefore have to come
-from each image's export trie (`LC_DYLD_EXPORTS_TRIE` in its `__LINKEDIT`),
-which is the next piece of work; that also provides the addresses needed
-to load minimal symbols for the cached libraries.
+from each image's export trie (`LC_DYLD_EXPORTS_TRIE` in its `__LINKEDIT`).
+That parser now exists too (patch 0023): it locates the image header
+through the mappings, reads the trie offset from the load commands, and
+walks the trie in the `.dyldlinkedit` subcache:
+
+```text
+0x1805a5000  /usr/lib/system/libsystem_c.dylib
+    0x180611264  __Exit
+    0x1805ab7cc  __NSGetArgc
+    0x1805ab7c0  __NSGetArgv
+```
+
+The remaining step is to feed these names into GDB's minimal symbol
+tables and solib list so that breakpoints, `info functions` and frames
+in system libraries get names.
 
 ## Early dlopen
 

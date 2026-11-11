@@ -29,6 +29,7 @@ revision and are applied in the order listed in `series` with
 | `0020` | `gdb/darwin-nat.c` | Use cooked register reads when writing cores |
 | `0021` | `gdb/darwin-nat.c` | Read thread state with `thread_get_state` instead of the thread regcaches |
 | `0022` | `gdb/darwin-nat.c` | Parse the dyld shared cache (header, mappings, images, subcache suffixes) and add `darwin-shared-cache` |
+| `0023` | `gdb/darwin-nat.c` | Walk each cached image's export trie (from the linkedit subcache) for symbol names and addresses |
 
 ## Applying with a three-way merge
 

@@ -1,0 +1,208 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index eb7cacf14d8..4bb10346b24 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3293,6 +3293,7 @@ struct darwin_dsc_state
+ {
+   std::vector<std::string> files;
+   std::vector<darwin_dsc_mapping> mappings;
++  std::vector<std::pair<std::string, std::vector<darwin_dsc_mapping>>> file_mappings;
+   std::vector<std::pair<uint64_t, std::string>> images;
+   uint64_t nlist_count = 0;
+   std::string uuid;
+@@ -3341,8 +3342,13 @@ darwin_dsc_parse (const std::string &path, darwin_dsc_state &state, int depth)
+       && h->mappingOffset + h->mappingCount * sizeof (darwin_dsc_mapping) <= size)
+     {
+       const auto *m = (const darwin_dsc_mapping *) (data + h->mappingOffset);
++      std::vector<darwin_dsc_mapping> file_maps;
+       for (uint32_t i = 0; i < h->mappingCount; i++)
+-	state.mappings.push_back (m[i]);
++	{
++	  state.mappings.push_back (m[i]);
++	  file_maps.push_back (m[i]);
++	}
++      state.file_mappings.emplace_back (path, std::move (file_maps));
+     }
+ 
+   if (h->imagesOffset != 0 && h->imagesCount != 0
+@@ -3406,6 +3412,166 @@ darwin_dsc_parse (const std::string &path, darwin_dsc_state &state, int depth)
+   munmap (map, size);
+ }
+ 
++
++static bool
++darwin_dsc_uleb (const gdb_byte *data, size_t size, size_t &off, uint64_t &value)
++{
++  value = 0;
++  int shift = 0;
++  while (off < size && shift < 64)
++    {
++      gdb_byte b = data[off++];
++      value |= (uint64_t) (b & 0x7f) << shift;
++      if ((b & 0x80) == 0)
++	return true;
++      shift += 7;
++    }
++  return false;
++}
++
++static void
++darwin_dsc_walk_trie (const gdb_byte *data, size_t size, size_t off,
++		      const std::string &prefix, uint64_t image_addr,
++		      std::vector<std::pair<std::string, uint64_t>> &out,
++		      size_t limit, int depth)
++{
++  if (off >= size || out.size () >= limit || depth > 128)
++    return;
++
++  uint64_t terminal = 0;
++  if (!darwin_dsc_uleb (data, size, off, terminal) || terminal > size)
++    return;
++
++  if (terminal != 0)
++    {
++      size_t term_end = off + terminal;
++      if (term_end > size)
++	return;
++      uint64_t flags, address;
++      size_t p = off;
++      if (!darwin_dsc_uleb (data, term_end, p, flags)
++	  || !darwin_dsc_uleb (data, term_end, p, address))
++	return;
++      /* Regular exports only (not re-exports, stubs or absolute).  */
++      if ((flags & 0x3) == 0 && (flags & 0x08) == 0 && (flags & 0x10) == 0)
++	out.emplace_back (prefix, image_addr + address);
++      off = term_end;
++    }
++
++  if (off >= size)
++    return;
++  unsigned children = data[off++];
++  for (unsigned i = 0; i < children && out.size () < limit; i++)
++    {
++      size_t end = off;
++      while (end < size && data[end] != 0)
++	end++;
++      if (end >= size)
++	return;
++      std::string edge ((const char *) data + off, end - off);
++      off = end + 1;
++      uint64_t child;
++      if (!darwin_dsc_uleb (data, size, off, child))
++	return;
++      darwin_dsc_walk_trie (data, size, child, prefix + edge, image_addr,
++			    out, limit, depth + 1);
++    }
++}
++
++/* Return the cache file and offset of the Mach-O header for ADDR.  */
++
++static bool
++darwin_dsc_image_header (const darwin_dsc_state &state, uint64_t addr,
++			 std::string &file, uint64_t &offset)
++{
++  for (const auto &fm : state.file_mappings)
++    for (const darwin_dsc_mapping &m : fm.second)
++      if (addr >= m.address && addr < m.address + m.size)
++	{
++	  file = fm.first;
++	  offset = m.fileOffset + (addr - m.address);
++	  return true;
++	}
++  return false;
++}
++
++static bool
++darwin_dsc_read_exports (const darwin_dsc_state &state, uint64_t image_addr,
++			 std::vector<std::pair<std::string, uint64_t>> &out,
++			 size_t limit)
++{
++  std::string file;
++  uint64_t header_off;
++  if (!darwin_dsc_image_header (state, image_addr, file, header_off))
++    return false;
++
++  int fd = open (file.c_str (), O_RDONLY);
++  if (fd < 0)
++    return false;
++
++  gdb_byte hdr[32];
++  if (pread (fd, hdr, sizeof (hdr), header_off) != sizeof (hdr)
++      || (hdr[0] != 0xcf || hdr[1] != 0xfa || hdr[2] != 0xed || hdr[3] != 0xfe))
++    {
++      close (fd);
++      return false;
++    }
++
++  auto r32 = [] (const gdb_byte *p)
++    { return (uint32_t) p[0] | ((uint32_t) p[1] << 8)
++	     | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24); };
++  uint32_t ncmds = r32 (hdr + 16);
++  uint32_t sizeofcmds = r32 (hdr + 20);
++
++  std::vector<gdb_byte> cmds (sizeofcmds);
++  if (pread (fd, cmds.data (), sizeofcmds, header_off + 32) != (ssize_t) sizeofcmds)
++    {
++      close (fd);
++      return false;
++    }
++
++  uint32_t dataoff = 0, datasize = 0;
++  size_t p = 0;
++  for (uint32_t i = 0; i < ncmds && p + 8 <= sizeofcmds; i++)
++    {
++      uint32_t cmd = r32 (&cmds[p]);
++      uint32_t cmdsize = r32 (&cmds[p + 4]);
++      if (cmdsize < 8 || p + cmdsize > sizeofcmds)
++	break;
++      if ((cmd == 0x80000033 || cmd == 0x22 || cmd == 0x80000022)
++	  && cmdsize >= 16)
++	{
++	  dataoff = r32 (&cmds[p + 8]);
++	  datasize = r32 (&cmds[p + 12]);
++	  break;
++	}
++      p += cmdsize;
++    }
++  close (fd);
++
++  if (dataoff == 0 || datasize == 0)
++    return false;
++
++  /* On release caches the linkedit lives in its own subcache file.  */
++  for (const std::string &f : state.files)
++    {
++      if (f.find ("dyldlinkedit") == std::string::npos)
++	continue;
++      int lfd = open (f.c_str (), O_RDONLY);
++      if (lfd < 0)
++	continue;
++      std::vector<gdb_byte> trie (datasize);
++      bool ok = pread (lfd, trie.data (), datasize, dataoff) == (ssize_t) datasize;
++      close (lfd);
++      if (!ok)
++	continue;
++      darwin_dsc_walk_trie (trie.data (), trie.size (), 0, "", image_addr,
++			    out, limit, 0);
++      return !out.empty ();
++    }
++  return false;
++}
++
+ static void
+ darwin_shared_cache_command (const char *args, int from_tty)
+ {
+@@ -3436,6 +3602,13 @@ darwin_shared_cache_command (const char *args, int from_tty)
+ 	continue;
+       gdb_printf ("  %s  %s\n",
+ 		  hex_string (img.first), img.second.c_str ());
++      if (filter != nullptr)
++	{
++	  std::vector<std::pair<std::string, uint64_t>> exports;
++	  if (darwin_dsc_read_exports (state, img.first, exports, 8))
++	    for (const auto &e : exports)
++	      gdb_printf ("      %s  %s\n", hex_string (e.second), e.first.c_str ());
++	}
+       if (++shown == 40)
+ 	{
+ 	  gdb_printf (_("  ...\n"));
