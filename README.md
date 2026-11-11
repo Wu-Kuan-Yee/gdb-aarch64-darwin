@@ -208,10 +208,11 @@ pin deliberately as described in `patches/README.md`.
   functions, sets breakpoints there through the hardware breakpoint
   registers, and follows compact-unwind frame records (both FRAME and
   FRAMELESS modes).  Line numbers are still unavailable, and a FRAMELESS
-  frame that saved its link register in a place compact unwind does not
-  describe can stop the backtrace one frame early.  `set
-  darwin-unwind-stack-scan on` enables a heuristic scan for such frames;
-  it can invent frames, so it is off by default.
+  frame is unwound by decoding its prologue from the function entry,
+  tracking SP adjustments and where x30 is stored.  When even that finds
+  no saved LR (a pure leaf or tail call), the backtrace stops.  `set
+  darwin-unwind-stack-scan on` additionally enables a heuristic scan; it
+  can invent frames, so it is off by default.
 - Type-erased libc++ types (`std::function`, `std::any`) have no printable
   value; the printers cover every libc++ type whose state is reachable
   through its data members.

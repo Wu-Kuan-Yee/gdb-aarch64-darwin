@@ -1,0 +1,171 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 760b020f863..e7def7948ce 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -4186,6 +4186,123 @@ darwin_cu_scan_stack (CORE_ADDR sp, CORE_ADDR *pc, CORE_ADDR *next_sp)
+   return false;
+ }
+ 
++
++/* Decode the part of an arm64 prologue that moves SP or saves x30.
++   Returns false for instructions that do not affect those.  */
++
++static bool
++darwin_cu_prologue_step (uint32_t insn, CORE_ADDR *sp, CORE_ADDR *lr_addr)
++{
++  uint32_t op = insn & 0xffc00000;
++  bool is_stp = op == 0xa9800000 || op == 0xa9000000 || op == 0xa8800000;
++  if (is_stp)
++    {
++      int rt = insn & 31;
++      int rt2 = (insn >> 10) & 31;
++      int64_t imm = ((int64_t) ((insn >> 15) & 0x7f) ^ 64) - 64;
++      imm *= 8;
++      CORE_ADDR addr;
++      if (op == 0xa9800000)	/* pre-index */
++	{
++	  *sp += imm;
++	  addr = *sp;
++	}
++      else if (op == 0xa8800000)	/* post-index */
++	{
++	  addr = *sp;
++	  *sp += imm;
++	}
++      else
++	addr = *sp + imm;
++      if (rt == 30)
++	*lr_addr = addr;
++      if (rt2 == 30)
++	*lr_addr = addr + 8;
++      return true;
++    }
++
++  uint32_t ldst = insn & 0xffe00c00;
++  if ((insn & 0xffc00000) == 0xf9000000)	/* STR (unsigned) */
++    {
++      int rt = insn & 31;
++      uint64_t imm = (uint64_t) ((insn >> 10) & 0xfff) << 3;
++      if (rt == 30)
++	*lr_addr = *sp + imm;
++      return true;
++    }
++  if (ldst == 0xf8000c00 || ldst == 0xf8000400 || ldst == 0xf8000000)
++    {
++      int rt = insn & 31;
++      int64_t imm = ((int64_t) ((insn >> 12) & 0x1ff) ^ 256) - 256;
++      CORE_ADDR addr;
++      if (ldst == 0xf8000c00)	/* pre-index */
++	{
++	  *sp += imm;
++	  addr = *sp;
++	}
++      else if (ldst == 0xf8000400)	/* post-index */
++	{
++	  addr = *sp;
++	  *sp += imm;
++	}
++      else
++	addr = *sp + imm;	/* unscaled */
++      if (rt == 30)
++	*lr_addr = addr;
++      return true;
++    }
++
++  if ((insn & 0xffc003ff) == 0xd10003ff)	/* SUB SP, SP, #imm */
++    {
++      *sp -= (insn >> 10) & 0xfff;
++      return true;
++    }
++  if ((insn & 0xffc003ff) == 0x910003ff)	/* ADD SP, SP, #imm */
++    {
++      *sp += (insn >> 10) & 0xfff;
++      return true;
++    }
++
++  return false;
++}
++
++static bool
++darwin_cu_analyze_frameless (CORE_ADDR func, CORE_ADDR pc, CORE_ADDR entry_sp,
++			     CORE_ADDR *caller_pc, CORE_ADDR *caller_sp)
++{
++  CORE_ADDR sp = entry_sp;
++  CORE_ADDR lr_addr = 0;
++  CORE_ADDR cur = func;
++
++  for (int i = 0; i < 64 && cur < pc; i++)
++    {
++      uint32_t insn;
++      if (target_read_memory (cur, (gdb_byte *) &insn, 4) != 0)
++	break;
++      darwin_cu_prologue_step (insn, &sp, &lr_addr);
++
++      /* A branch ends the prologue; anything after it is body code.  */
++      if ((insn & 0x7c000000) == 0x14000000
++	  || (insn & 0xfffffc1f) == 0xd61f0000
++	  || (insn & 0xffffffff) == 0xd65f03c0)
++	break;
++      cur += 4;
++    }
++
++  if (lr_addr == 0 || lr_addr < entry_sp - (1u << 20)
++      || lr_addr >= entry_sp)
++    return false;
++
++  CORE_ADDR value = 0;
++  if (target_read_memory (lr_addr, (gdb_byte *) &value, 8) != 0
++      || value == 0 || !darwin_cu_pc_is_code (value))
++    return false;
++
++  *caller_pc = value;
++  *caller_sp = entry_sp;
++  return true;
++}
++
+ static int
+ darwin_cu_sniffer (const struct frame_unwind *self,
+ 		   const frame_info_ptr &this_frame, void **this_cache)
+@@ -4230,20 +4347,31 @@ darwin_cu_sniffer (const struct frame_unwind *self,
+ 	return 0;
+       prev_sp = sp + stack_size;
+       prev_fp = fp;
+-      try
+-	{
+-	  lr = get_frame_register_unsigned (this_frame, AARCH64_LR_REGNUM);
+-	}
+-      catch (const gdb_exception_error &)
++
++      CORE_ADDR analyzed = 0, analyzed_sp = 0;
++      if (darwin_cu_analyze_frameless (func, pc, sp + stack_size,
++				       &analyzed, &analyzed_sp))
+ 	{
+-	  lr = 0;
++	  lr = analyzed;
++	  prev_sp = analyzed_sp;
+ 	}
+-      if (lr == 0 || lr == pc)
++      else
+ 	{
+-	  if (!darwin_unwind_stack_scan)
+-	    return 0;
+-	  if (!darwin_cu_scan_stack (sp, &lr, &prev_sp))
+-	    return 0;
++	  try
++	    {
++	      lr = get_frame_register_unsigned (this_frame, AARCH64_LR_REGNUM);
++	    }
++	  catch (const gdb_exception_error &)
++	    {
++	      lr = 0;
++	    }
++	  if (lr == 0 || lr == pc)
++	    {
++	      if (!darwin_unwind_stack_scan)
++		return 0;
++	      if (!darwin_cu_scan_stack (sp, &lr, &prev_sp))
++		return 0;
++	    }
+ 	}
+     }
+   else				/* FRAME */
