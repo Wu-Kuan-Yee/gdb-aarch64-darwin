@@ -1,0 +1,226 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 91f21155978..a639be24978 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -35,10 +35,12 @@
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <mach/arm/thread_status.h>
++#include "symfile.h"
+ #include "event-top.h"
+ #include "inf-loop.h"
+ #include <sys/stat.h>
+ #include <mach/arm/thread_status.h>
++#include "symfile.h"
+ #include "inf-child.h"
+ #include "value.h"
+ #include "arch-utils.h"
+@@ -141,6 +143,11 @@ static const char *copied_shell;
+ static bool darwin_early_solib = true;
+ static bool darwin_early_solib_injected;
+ 
++/* Load export names of common cached libraries as minimal symbols.  */
++static bool darwin_shcache_symbols = true;
++static bool darwin_shcache_symbols_loaded;
++static void darwin_shcache_load_symbols ();
++
+ #define PAGE_TRUNC(x) ((x) & ~(mach_page_size - 1))
+ #define PAGE_ROUND(x) PAGE_TRUNC((x) + mach_page_size - 1)
+ 
+@@ -1363,6 +1370,8 @@ darwin_nat_target::wait (ptid_t ptid, struct target_waitstatus *status,
+       solib_add (nullptr, 0, 1);
+     }
+ 
++  darwin_shcache_load_symbols ();
++
+   return res;
+ }
+ 
+@@ -2374,6 +2383,8 @@ darwin_nat_target::create_inferior (const char *exec_file,
+   if (exec_file == nullptr)
+     no_executable_specified_error ();
+ 
++  darwin_shcache_symbols_loaded = false;
++
+   std::optional<scoped_restore_tmpl<bool>> restore_startup_with_shell;
+   darwin_nat_target *the_target = this;
+ 
+@@ -3666,6 +3677,165 @@ darwin_shared_symbol_command (const char *args, int from_tty)
+ 		name.c_str ());
+ }
+ 
++
++static void
++darwin_shcache_load_symbols ()
++{
++  if (!darwin_shcache_symbols || darwin_shcache_symbols_loaded)
++    return;
++  darwin_shcache_symbols_loaded = true;
++
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, state, 0);
++  if (state.files.empty ())
++    return;
++
++  static const char *allowed[] = {
++    "libsystem_c.dylib", "libsystem_malloc.dylib",
++    "libsystem_kernel.dylib", "libsystem_pthread.dylib",
++    "libsystem_platform.dylib", "libsystem_info.dylib",
++    "libsystem_blocks.dylib", "libdyld.dylib", "libc++abi.dylib",
++    nullptr
++  };
++
++  std::vector<std::pair<std::string, uint64_t>> symbols;
++  std::set<std::string> seen;
++  for (const auto &img : state.images)
++    {
++      bool wanted = false;
++      for (int i = 0; allowed[i] != nullptr; i++)
++	if (img.second.find (allowed[i]) != std::string::npos)
++	  {
++	    wanted = true;
++	    break;
++	  }
++      if (!wanted)
++	continue;
++
++      std::vector<std::pair<std::string, uint64_t>> exports;
++      darwin_dsc_read_exports (state, img.first, exports, 200000);
++      for (auto &e : exports)
++	if (!e.first.empty () && seen.insert (e.first).second)
++	  symbols.push_back (std::move (e));
++    }
++
++  if (symbols.empty ())
++    return;
++
++  std::string strtab (1, '\0');
++  std::vector<gdb_byte> nlist;
++  for (const auto &sym : symbols)
++    {
++      uint32_t name_off = strtab.size ();
++      strtab += sym.first;
++      strtab.push_back ('\0');
++      auto put32 = [&] (uint32_t v)
++	{ nlist.push_back (v & 0xff); nlist.push_back ((v >> 8) & 0xff);
++	  nlist.push_back ((v >> 16) & 0xff); nlist.push_back ((v >> 24) & 0xff); };
++      auto put64 = [&] (uint64_t v)
++	{ put32 ((uint32_t) v); put32 ((uint32_t) (v >> 32)); };
++      put32 (name_off);
++      nlist.push_back (0x0f);	/* N_SECT | N_EXT */
++      nlist.push_back (1);	/* section */
++      nlist.push_back (0); nlist.push_back (0);	/* n_desc */
++      put64 (sym.second);
++    }
++
++  const uint32_t seg_cmd_size = 152;
++  const uint32_t link_cmd_size = 72;
++  const uint32_t main_cmd_size = 24;
++  const uint32_t symtab_cmd_size = 24;
++  const uint32_t dysymtab_cmd_size = 80;
++  const uint32_t cmds_size = seg_cmd_size + link_cmd_size + main_cmd_size
++			     + symtab_cmd_size + dysymtab_cmd_size;
++  const uint32_t pad = 0x1000;
++  const uint32_t symoff = 32 + cmds_size + pad;
++  const uint32_t stroff = symoff + nlist.size ();
++
++  std::vector<gdb_byte> out;
++  auto w32 = [&] (uint32_t v)
++    { out.push_back (v & 0xff); out.push_back ((v >> 8) & 0xff);
++      out.push_back ((v >> 16) & 0xff); out.push_back ((v >> 24) & 0xff); };
++  auto w64 = [&] (uint64_t v)
++    { w32 ((uint32_t) v); w32 ((uint32_t) (v >> 32)); };
++  auto wname = [&] (const char *s)
++    { for (int i = 0; i < 16; i++)
++	out.push_back (i < (int) strlen (s) ? s[i] : 0); };
++
++  /* mach_header_64 */
++  w32 (0xfeedfacf); w32 (0x0100000c); w32 (0); w32 (2); /* MH_EXECUTE */
++  w32 (5); w32 (cmds_size); w32 (0); w32 (0);
++
++  /* __TEXT segment + __text section.  */
++  w32 (0x19); w32 (seg_cmd_size); wname ("__TEXT");
++  w64 (0x180000000); w64 (0x180000000); w64 (0); w64 (stroff + strtab.size ());
++  w32 (7); w32 (5); w32 (1); w32 (0);
++  wname ("__text"); wname ("__TEXT");
++  w64 (0x180000000); w64 (0x180000000); w32 (0); w32 (4);
++  w32 (0); w32 (0); w32 (1); w32 (0); w32 (0); w32 (0); /* S_ZEROFILL */
++
++  /* __LINKEDIT */
++  w32 (0x19); w32 (link_cmd_size); wname ("__LINKEDIT");
++  w64 (0x300000000); w64 (nlist.size () + strtab.size ());
++  w64 (symoff); w64 (nlist.size () + strtab.size ());
++  w32 (7); w32 (1); w32 (0); w32 (0);
++
++  /* LC_MAIN */
++  w32 (0x28); w32 (main_cmd_size); w64 (0); w64 (0);
++
++  /* LC_SYMTAB */
++  w32 (2); w32 (symtab_cmd_size);
++  w32 (symoff); w32 (symbols.size ()); w32 (stroff); w32 (strtab.size ());
++
++  /* LC_DYSYMTAB */
++  w32 (0xb); w32 (dysymtab_cmd_size);
++  for (int i = 0; i < 18; i++)
++    {
++      if (i == 3) w32 (symbols.size ());	/* nextdefsym */
++      else w32 (0);
++    }
++
++  out.insert (out.end (), pad, 0);
++  out.insert (out.end (), nlist.begin (), nlist.end ());
++  out.insert (out.end (), strtab.begin (), strtab.end ());
++
++  char path[] = "/tmp/gdb-dsc-XXXXXX";
++  int fd = mkstemp (path);
++  if (fd < 0)
++    return;
++  size_t done = 0;
++  while (done < out.size ())
++    {
++      ssize_t n = write (fd, out.data () + done, out.size () - done);
++      if (n <= 0)
++	{
++	  close (fd);
++	  unlink (path);
++	  return;
++	}
++      done += n;
++    }
++  close (fd);
++
++  gdb_bfd_ref_ptr bfd = gdb_bfd_open (path, nullptr, -1);
++  if (bfd == nullptr)
++    {
++      unlink (path);
++      return;
++    }
++
++  section_addr_info addrs;
++  symbol_file_add_from_bfd (bfd, path, (symfile_add_flags) 0, &addrs,
++			    (objfile_flags) (OBJF_USERLOADED | OBJF_SHARED),
++			    nullptr);
++  unlink (path);
++}
++
+ INIT_GDB_FILE (darwin_nat)
+ {
+   kern_return_t kret;
+@@ -3700,6 +3870,12 @@ the first non-system image added by dyld, so that pending breakpoints can be\n\
+ resolved before a constructor calls into the newly loaded library."),
+ 			   NULL, NULL, &setlist, &showlist);
+ 
++  add_setshow_boolean_cmd ("darwin-shared-symbols", class_run,
++			   &darwin_shcache_symbols, _("\
++Set whether shared-cache export names are loaded as minimal symbols."), _("\
++Show whether shared-cache export names are loaded as minimal symbols."), NULL,
++			   NULL, NULL, &setlist, &showlist);
++
+   add_cmd ("darwin-shared-symbol", class_info, darwin_shared_symbol_command,
+ 	   _("Find an exported symbol in the dyld shared cache.\n\
+ Usage: darwin-shared-symbol NAME [PATH-FILTER]"),

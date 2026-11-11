@@ -1,0 +1,123 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index a639be24978..ce5d194bddd 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -144,7 +144,7 @@ static bool darwin_early_solib = true;
+ static bool darwin_early_solib_injected;
+ 
+ /* Load export names of common cached libraries as minimal symbols.  */
+-static bool darwin_shcache_symbols = true;
++static bool darwin_shcache_symbols = false;
+ static bool darwin_shcache_symbols_loaded;
+ static void darwin_shcache_load_symbols ();
+ 
+@@ -1368,9 +1368,11 @@ darwin_nat_target::wait (ptid_t ptid, struct target_waitstatus *status,
+       priv->solib_events_reported = true;
+       darwin_solib_install_notifier ();
+       solib_add (nullptr, 0, 1);
+-    }
+ 
+-  darwin_shcache_load_symbols ();
++      /* The cache is mapped once dyld is up, so this is the first
++	 point where its slide can be computed.  */
++      darwin_shcache_load_symbols ();
++    }
+ 
+   return res;
+ }
+@@ -3310,6 +3312,8 @@ struct darwin_dsc_state
+   std::string uuid;
+ };
+ 
++static uint64_t darwin_shcache_slide (const darwin_dsc_state &state);
++
+ static void
+ darwin_dsc_parse (const std::string &path, darwin_dsc_state &state, int depth)
+ {
+@@ -3600,6 +3604,8 @@ darwin_shared_cache_command (const char *args, int from_tty)
+ 
+   gdb_printf (_("Shared cache: %s\n"), base.c_str ());
+   gdb_printf (_("  uuid: %s\n"), state.uuid.c_str ());
++  uint64_t slide = darwin_shcache_slide (state);
++  gdb_printf (_("  slide: %s\n"), hex_string (slide));
+   gdb_printf (_("  files: %zu, mappings: %zu, images: %zu, local symbols: %llu\n"),
+ 	      state.files.size (), state.mappings.size (),
+ 	      state.images.size (),
+@@ -3678,6 +3684,45 @@ darwin_shared_symbol_command (const char *args, int from_tty)
+ }
+ 
+ 
++
++/* Runtime slide of the shared cache: find the mapped cache header by
++   its magic; its unslid address is the shared region base.  */
++
++static uint64_t
++darwin_shcache_slide (const darwin_dsc_state &state)
++{
++  inferior *inf = current_inferior ();
++  darwin_inferior *priv = get_darwin_inferior (inf);
++  if (priv->task == MACH_PORT_NULL || inf->pid == 0)
++    return 0;
++
++  mach_vm_address_t addr = 0;
++  while (true)
++    {
++      mach_vm_size_t size = 0;
++      vm_region_basic_info_data_64_t info;
++      mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++      mach_port_t object_name = MACH_PORT_NULL;
++      kern_return_t kret
++	= mach_vm_region (priv->task, &addr, &size, VM_REGION_BASIC_INFO_64,
++			  (vm_region_info_t) &info, &count, &object_name);
++      if (kret != KERN_SUCCESS)
++	break;
++
++      if ((info.protection & VM_PROT_READ) != 0 && size >= 16)
++	{
++	  gdb_byte magic[16];
++	  if (target_read_memory (addr, magic, sizeof (magic)) == 0
++	      && memcmp (magic, "dyld_v1", 7) == 0)
++	    return addr - 0x180000000;
++	}
++
++      addr += size;
++    }
++
++  return 0;
++}
++
+ static void
+ darwin_shcache_load_symbols ()
+ {
+@@ -3703,6 +3748,8 @@ darwin_shcache_load_symbols ()
+     nullptr
+   };
+ 
++  uint64_t slide = darwin_shcache_slide (state);
++
+   std::vector<std::pair<std::string, uint64_t>> symbols;
+   std::set<std::string> seen;
+   for (const auto &img : state.images)
+@@ -3743,7 +3790,7 @@ darwin_shcache_load_symbols ()
+       nlist.push_back (0x0f);	/* N_SECT | N_EXT */
+       nlist.push_back (1);	/* section */
+       nlist.push_back (0); nlist.push_back (0);	/* n_desc */
+-      put64 (sym.second);
++      put64 (sym.second + slide);
+     }
+ 
+   const uint32_t seg_cmd_size = 152;
+@@ -3773,10 +3820,11 @@ darwin_shcache_load_symbols ()
+ 
+   /* __TEXT segment + __text section.  */
+   w32 (0x19); w32 (seg_cmd_size); wname ("__TEXT");
+-  w64 (0x180000000); w64 (0x180000000); w64 (0); w64 (stroff + strtab.size ());
++  w64 (0x180000000 + slide); w64 (0x200000000); w64 (0);
++  w64 (stroff + strtab.size ());
+   w32 (7); w32 (5); w32 (1); w32 (0);
+   wname ("__text"); wname ("__TEXT");
+-  w64 (0x180000000); w64 (0x180000000); w32 (0); w32 (4);
++  w64 (0x180000000 + slide); w64 (0x200000000); w32 (0); w32 (4);
+   w32 (0); w32 (0); w32 (1); w32 (0); w32 (0); w32 (0); /* S_ZEROFILL */
+ 
+   /* __LINKEDIT */

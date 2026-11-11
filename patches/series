@@ -22,3 +22,5 @@
 0022-gdb-parse-the-dyld-shared-cache.patch
 0023-gdb-read-shared-cache-export-tries.patch
 0024-gdb-find-shared-cache-symbols.patch
+0025-gdb-load-shared-cache-symbols.patch
+0026-gdb-apply-shared-cache-slide.patch
