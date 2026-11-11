@@ -28,8 +28,18 @@ the "dirty pages only" default.  On GDB's side the equivalents are the
 thread list (`darwin_thread_t`), `gdbarch` register sets, and the same
 `mach_vm_region` walk that already backs `info proc mappings`.
 
-Effort: the writer itself is a few days.  It is not enough on its own,
-because GDB cannot read a Mach-O core today:
+The writer is implemented (`darwin_write_core_file` in `darwin-nat.c`,
+patch 0016).  `gcore` on a Darwin inferior now produces a Mach-O core
+with `LC_UNIXTHREAD` register blocks, `LC_SEGMENT_64` memory and an
+`LC_NOTE "process metadata"` thread list.  Apple's lldb can load it and
+reports the stopped thread and PC:
+
+```text
+* thread #1: tid = 0x0000, 0x0000000100000538
+      pc = 0x0000000100000538
+```
+
+It is not enough on its own, because GDB cannot read a Mach-O core today:
 
 ```text
 (gdb) file hello
@@ -91,6 +101,6 @@ that is why the setting exists.
 
 ## Suggested order
 
-1. Finish the libc++ printers (tuple, variant; unordered_map is done).
-2. Mach-O core writer plus reader (this also makes `gcore` useful).
-3. Shared cache parser, which also unlocks system-library symbols.
+1. Mach-O core reader: a Darwin core target (or corelow integration) so
+   the core written by `gcore` can be opened by GDB itself.
+2. Shared cache parser, which also unlocks system-library symbols.

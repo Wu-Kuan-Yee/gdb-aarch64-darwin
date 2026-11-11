@@ -22,6 +22,7 @@ revision and are applied in the order listed in `series` with
 | `0013` | `gdb/darwin-nat.c` | Use `/bin/bash` when caching a shell: the arm64e-only `/bin/sh` copy dies with SIGTRAP under the debugger |
 | `0014` | `gdb/python/lib/gdb/libcxx.py`, `gdb/python/lib/gdb/__init__.py`, `gdb/data-directory/Makefile.in` | libc++ pretty-printers (string, vector, map, set, smart pointers, optional, string_view), loaded at startup because libc++ ships no `.debug_gdb_scripts` |
 | `0015` | `gdb/darwin-nat.c` | Inject the early-image helper, swallow its trap and refresh solibs before a startup constructor calls into a dlopen'ed library |
+| `0016` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/gcore.c` | Write Mach-O core files (`MH_CORE` + `LC_SEGMENT_64` + `LC_THREAD`) from `gcore` |
 
 ## Applying with a three-way merge
 

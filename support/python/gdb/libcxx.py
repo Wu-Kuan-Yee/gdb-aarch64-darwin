@@ -250,6 +250,60 @@ def _hash_printer(kind):
     return lambda val: HashPrinter(val, kind)
 
 
+class TuplePrinter:
+    def __init__(self, val):
+        self.val = val
+
+    def _leaves(self, impl):
+        for field in impl.type.fields():
+            name = str(field.type)
+            if "__tuple_leaf<" in name:
+                yield impl[field]["__value_"]
+            elif "__tuple_impl<" in name:
+                yield from self._leaves(impl[field])
+
+    def to_string(self):
+        return "std::__1::tuple"
+
+    def children(self):
+        for i, value in enumerate(self._leaves(self.val["__base_"])):
+            yield "[%d]" % i, value
+
+
+def _variant_base(val):
+    for field in val.type.fields():
+        if field.name == "__data":
+            return val
+    for field in val.type.fields():
+        if field.is_base_class:
+            found = _variant_base(val[field])
+            if found is not None:
+                return found
+    return None
+
+
+class VariantPrinter:
+    def __init__(self, val):
+        self.val = val
+
+    def _active(self):
+        base = _variant_base(self.val["__impl_"])
+        index = int(base["__index"])
+        node = base["__data"]
+        for _ in range(index):
+            node = node["__tail"]
+        return index, node["__head"]["__value"]
+
+    def to_string(self):
+        index, value = self._active()
+        return "std::__1::variant (index %d) = %s" % (index, value)
+
+    def children(self):
+        index, value = self._active()
+        yield "index", index
+        yield "value", value
+
+
 def _make_printers():
     pp = gdb.printing.RegexpCollectionPrettyPrinter("libcxx")
     pp.add_printer(
@@ -283,6 +337,8 @@ def _make_printers():
     pp.add_printer(
         "unordered_set", r"^std::__1::unordered_set<.*>$",
         _hash_printer("unordered_set"))
+    pp.add_printer("tuple", r"^std::__1::tuple<.*>$", TuplePrinter)
+    pp.add_printer("variant", r"^std::__1::variant<.*>$", VariantPrinter)
     return pp
 
 

@@ -1,0 +1,328 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 6a3260c1bc5..c5ea06a9f94 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -30,6 +30,8 @@
+ #include "gdbcore.h"
+ #include "gdbthread.h"
+ #include "regcache.h"
++#include "thread-iter.h"
++#include <fcntl.h>
+ #include "event-top.h"
+ #include "inf-loop.h"
+ #include <sys/stat.h>
+@@ -2566,6 +2568,281 @@ darwin_nat_target::info_proc (const char *args, enum info_proc_what what)
+   return true;
+ }
+ 
++
++/* Write a Mach-O core file for the current inferior.  The format is the
++   same one LLDB's ObjectFileMachO::SaveCore produces: an MH_CORE header,
++   one LC_SEGMENT_64 per private readable region, and one LC_THREAD per
++   thread with an ARM_THREAD_STATE64 register block.  Returns false when
++   the target is not a Darwin process or the file cannot be written.  */
++
++bool
++darwin_write_core_file (const char *filename)
++{
++  struct inferior *inf = current_inferior ();
++  if (inf == nullptr || inf->pid == 0
++      || gdbarch_osabi (inf->arch ()) != GDB_OSABI_DARWIN)
++    return false;
++
++  darwin_inferior *priv = get_darwin_inferior (inf);
++  if (priv->task == MACH_PORT_NULL)
++    return false;
++
++  struct gdbarch *gdbarch = inf->arch ();
++
++  struct region
++  {
++    uint64_t addr;
++    uint64_t size;
++    uint32_t prot;
++  };
++  std::vector<region> regions;
++  uint64_t total = 0;
++
++  mach_vm_address_t addr = 0;
++  while (true)
++    {
++      mach_vm_size_t size = 0;
++      vm_region_basic_info_data_64_t info;
++      mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++      mach_port_t object_name = MACH_PORT_NULL;
++      kern_return_t kret
++	= mach_vm_region (priv->task, &addr, &size, VM_REGION_BASIC_INFO_64,
++			  (vm_region_info_t) &info, &count, &object_name);
++
++      if (kret != KERN_SUCCESS)
++	break;
++      /* Only private writable memory holds state worth saving; this skips
++	 the enormous read-only reservations and the dyld shared cache.  */
++      if (size != 0
++	  && (info.protection & (VM_PROT_READ | VM_PROT_WRITE))
++	     == (VM_PROT_READ | VM_PROT_WRITE)
++	  && !info.shared
++	  && size <= (1ull << 30))
++	{
++	  total += size;
++	  if (total <= (4ull << 30))
++	    regions.push_back ({addr, size, (uint32_t) info.protection});
++	}
++      addr += size;
++    }
++
++  struct thread_state
++  {
++    uint64_t x[29];
++    uint64_t fp;
++    uint64_t lr;
++    uint64_t sp;
++    uint64_t pc;
++    uint32_t cpsr;
++    uint64_t id;
++  };
++  std::vector<thread_state> threads;
++
++  for (struct thread_info &tp : all_threads ())
++    {
++      if (tp.inf != inf || tp.state () == THREAD_EXITED)
++	continue;
++
++      struct regcache *regcache = get_thread_regcache (&tp);
++      if (regcache == nullptr)
++	continue;
++
++      auto regnum = [&] (const char *name)
++	{
++	  for (int r = 0; r < gdbarch_num_regs (gdbarch); r++)
++	    {
++	      const char *rn = gdbarch_register_name (gdbarch, r);
++	      if (rn != nullptr && strcmp (rn, name) == 0)
++		return r;
++	    }
++	  return -1;
++	};
++      auto read_reg = [&] (const char *name, uint64_t *out)
++	{
++	  int r = regnum (name);
++	  ULONGEST value = 0;
++	  if (r >= 0
++	      && regcache_raw_read_unsigned (regcache, r, &value) == 0)
++	    *out = value;
++	};
++
++      thread_state st {};
++      char name[8];
++      for (int i = 0; i < 29; i++)
++	{
++	  xsnprintf (name, sizeof (name), "x%d", i);
++	  read_reg (name, &st.x[i]);
++	}
++      read_reg ("x29", &st.fp);
++      read_reg ("x30", &st.lr);
++      read_reg ("sp", &st.sp);
++      st.pc = regcache_read_pc (regcache);
++      st.id = tp.ptid.tid ();
++
++      int cpsr = regnum ("cpsr");
++      ULONGEST value = 0;
++      if (cpsr >= 0
++	  && regcache_raw_read_unsigned (regcache, cpsr, &value) == 0)
++	st.cpsr = (uint32_t) value;
++
++      threads.push_back (st);
++    }
++
++  std::vector<uint8_t> cmds;
++  auto put32 = [&] (uint32_t v)
++    {
++      cmds.push_back (v & 0xff);
++      cmds.push_back ((v >> 8) & 0xff);
++      cmds.push_back ((v >> 16) & 0xff);
++      cmds.push_back ((v >> 24) & 0xff);
++    };
++  auto put64 = [&] (uint64_t v)
++    {
++      put32 ((uint32_t) v);
++      put32 ((uint32_t) (v >> 32));
++    };
++
++  /* LC_THREAD commands.  */
++  for (const thread_state &st : threads)
++    {
++      put32 (0x4);		/* LC_UNIXTHREAD */
++      put32 (8 + 8 + 272);	/* cmdsize */
++      put32 (6);		/* ARM_THREAD_STATE64 */
++      put32 (272 / 4);		/* count */
++      for (int i = 0; i < 29; i++)
++	put64 (st.x[i]);
++      put64 (st.fp);
++      put64 (st.lr);
++      put64 (st.sp);
++      put64 (st.pc);
++      put32 (st.cpsr);
++      put32 (0);
++    }
++
++  /* LC_NOTE "process metadata": LLDB builds its thread list from this
++     JSON payload, and requires one entry per LC_THREAD in the same order.  */
++  std::string metadata = "{\"threads\":[";
++  for (size_t i = 0; i < threads.size (); i++)
++    {
++      if (i != 0)
++	metadata += ",";
++      metadata += string_printf ("{\"thread_id\":%llu}",
++				 (unsigned long long) threads[i].id);
++    }
++  metadata += "]}";
++
++  const uint32_t note_cmd_size = 40;
++  uint64_t note_off
++    = (32 + cmds.size () + regions.size () * 72 + note_cmd_size + 15)
++      & ~((uint64_t) 15);
++  uint64_t payload = (note_off + metadata.size () + 4095)
++		     & ~((uint64_t) 4095);
++  std::vector<uint64_t> fileoffs (regions.size ());
++  for (size_t i = 0; i < regions.size (); i++)
++    {
++      fileoffs[i] = payload;
++      payload += regions[i].size;
++    }
++
++  /* LC_SEGMENT_64 commands.  */
++  for (size_t i = 0; i < regions.size (); i++)
++    {
++      const region &r = regions[i];
++      put32 (0x19);		/* LC_SEGMENT_64 */
++      put32 (72);		/* cmdsize */
++      for (int j = 0; j < 4; j++)
++	put32 (0);		/* segname */
++      put64 (r.addr);
++      put64 (r.size);
++      put64 (fileoffs[i]);
++      put64 (r.size);
++      put32 (r.prot);
++      put32 (r.prot);
++      put32 (0);		/* nsects */
++      put32 (0);		/* flags */
++    }
++
++  /* LC_NOTE command.  */
++  put32 (0x31);			/* LC_NOTE */
++  put32 (note_cmd_size);
++  put32 (0x00626467);		/* "gdb" in the owner field */
++  put32 (0);
++  put32 (0);
++  put32 (0);
++  put64 (note_off);
++  put64 (metadata.size ());
++
++  /* Mach header.  */
++  std::vector<uint8_t> header;
++  auto h32 = [&] (uint32_t v)
++    {
++      header.push_back (v & 0xff);
++      header.push_back ((v >> 8) & 0xff);
++      header.push_back ((v >> 16) & 0xff);
++      header.push_back ((v >> 24) & 0xff);
++    };
++  h32 (0xfeedfacf);		/* MH_MAGIC_64 */
++  h32 (0x0100000c);		/* CPU_TYPE_ARM64 */
++  h32 (0);			/* CPU_SUBTYPE_ARM64_ALL */
++  h32 (4);			/* MH_CORE */
++  h32 (threads.size () + regions.size () + 1);
++  h32 (cmds.size ());
++  h32 (0);			/* flags */
++  h32 (0);			/* reserved */
++
++  int fd = open (filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
++  if (fd < 0)
++    {
++      warning (_("cannot create %s: %s"), filename, safe_strerror (errno));
++      return false;
++    }
++
++  auto write_all = [&] (const void *buf, size_t len)
++    {
++      const char *p = (const char *) buf;
++      while (len > 0)
++	{
++	  ssize_t n = write (fd, p, len);
++	  if (n <= 0)
++	    return false;
++	  p += n;
++	  len -= n;
++	}
++      return true;
++    };
++
++  bool ok = write_all (header.data (), header.size ())
++	    && write_all (cmds.data (), cmds.size ());
++  if (ok && lseek (fd, note_off, SEEK_SET) >= 0)
++    ok = write_all (metadata.data (), metadata.size ());
++  else
++    ok = false;
++
++  std::vector<uint8_t> buffer (64 * 1024);
++  for (size_t i = 0; ok && i < regions.size (); i++)
++    {
++      const region &r = regions[i];
++      if (lseek (fd, fileoffs[i], SEEK_SET) < 0)
++	{
++	  ok = false;
++	  break;
++	}
++      for (uint64_t off = 0; ok && off < r.size; off += buffer.size ())
++	{
++	  size_t n = (size_t) std::min<uint64_t> (buffer.size (), r.size - off);
++	  if (target_read_memory (r.addr + off, buffer.data (), n) != 0)
++	    memset (buffer.data (), 0, n);
++	  ok = write_all (buffer.data (), n);
++	}
++    }
++
++  if (close (fd) != 0)
++    ok = false;
++  if (!ok)
++    unlink (filename);
++  return ok;
++}
++
+ const char *
+ darwin_nat_target::pid_to_exec_file (int pid)
+ {
+diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
+index 9994d7c73a0..5ac7c74de91 100644
+--- a/gdb/darwin-nat.h
++++ b/gdb/darwin-nat.h
+@@ -220,3 +220,6 @@ void darwin_set_sstep (thread_t thread, int enable);
+ void darwin_check_osabi (darwin_inferior *inf, thread_t thread);
+ 
+ #endif /* GDB_DARWIN_NAT_H */
++
++/* Write a Mach-O core file for the current inferior (Darwin).  */
++bool darwin_write_core_file (const char *filename);
+diff --git a/gdb/gcore.c b/gdb/gcore.c
+index 77d915505d1..c399e28a23f 100644
+--- a/gdb/gcore.c
++++ b/gdb/gcore.c
+@@ -161,6 +161,17 @@ gcore_command (const char *args, int from_tty)
+     gdb_printf ("Opening corefile '%s' for output.\n",
+ 		corefilename.get ());
+ 
++#if defined (__APPLE__)
++  extern bool darwin_write_core_file (const char *filename);
++
++  /* Darwin cores are Mach-O, not ELF, so they cannot go through BFD.  */
++  if (darwin_write_core_file (corefilename.get ()))
++    {
++      gdb_printf (_("Saved corefile %s\n"), corefilename.get ());
++      return;
++    }
++#endif
++
+   if (target_supports_dumpcore ())
+     target_dumpcore (corefilename.get ());
+   else

@@ -36,6 +36,7 @@ The smoke test in `tests/` exercises these on every build:
 | Python scripting | works when a Python with development headers is installed, or in the portable build; can also be linked statically with its runtime bundled (see docs/EMBEDDED.md) |
 | C++ pretty printing | libc++ (`std::__1`) printers for string, vector, map, set, unique_ptr, shared_ptr, optional and string_view are loaded automatically |
 | Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
+| Core files | `gcore` writes native Mach-O cores (`MH_CORE` + segments + threads); reading them back in GDB is in progress |
 | Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
 | `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |
