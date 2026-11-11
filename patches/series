@@ -21,3 +21,4 @@
 0021-gdb-dump-thread-state-from-mach.patch
 0022-gdb-parse-the-dyld-shared-cache.patch
 0023-gdb-read-shared-cache-export-tries.patch
+0024-gdb-find-shared-cache-symbols.patch

@@ -96,9 +96,22 @@ walks the trie in the `.dyldlinkedit` subcache:
     0x1805ab7c0  __NSGetArgv
 ```
 
-The remaining step is to feed these names into GDB's minimal symbol
-tables and solib list so that breakpoints, `info functions` and frames
-in system libraries get names.
+A lookup command built on the same parser now answers name-to-address
+questions directly:
+
+```text
+(gdb) darwin-shared-symbol malloc libsystem_malloc
+0x181e79ce8  _malloc  /usr/lib/system/libsystem_malloc.dylib
+```
+
+Feeding these names into GDB's own minimal symbol tables is still open.
+The synthetic-symbol-file route was tried: BFD on macOS does not build the
+ELF target, and `add-symbol-file` rejects hand-made Mach-O files that
+carry only a symbol table (it requires a loadable section whose file
+contents are valid, while the shared-region section has to be huge and is
+discarded as invalid).  The next approach is to create an objfile through
+GDB's minimal-symbol reader with sections covering the cache region, or to
+use a real Mach-O object generated for the loaded images.
 
 ## Early dlopen
 

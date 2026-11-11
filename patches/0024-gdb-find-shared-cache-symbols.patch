@@ -1,0 +1,72 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 4bb10346b24..91f21155978 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3617,6 +3617,55 @@ darwin_shared_cache_command (const char *args, int from_tty)
+     }
+ }
+ 
++
++static void
++darwin_shared_symbol_command (const char *args, int from_tty)
++{
++  if (args == nullptr || *args == '\0')
++    error (_("usage: darwin-shared-symbol NAME [PATH-FILTER]"));
++
++  std::string text (args);
++  size_t space = text.find (' ');
++  std::string name = text.substr (0, space);
++  std::string filter
++    = (space == std::string::npos) ? std::string () : text.substr (space + 1);
++
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, state, 0);
++  if (state.files.empty ())
++    error (_("cannot read the dyld shared cache"));
++
++  int matches = 0;
++  for (const auto &img : state.images)
++    {
++      if (!filter.empty ()
++	  && img.second.find (filter) == std::string::npos)
++	continue;
++
++      std::vector<std::pair<std::string, uint64_t>> exports;
++      darwin_dsc_read_exports (state, img.first, exports, 200000);
++      for (const auto &e : exports)
++	if (e.first == name
++	    || (e.first.size () == name.size () + 1
++		&& e.first[0] == '_' && e.first.compare (1, std::string::npos, name) == 0))
++	  {
++	    gdb_printf ("%s  %s  %s\n", hex_string (e.second),
++			e.first.c_str (), img.second.c_str ());
++	    if (++matches >= 20)
++	      return;
++	  }
++    }
++
++  if (matches == 0)
++    gdb_printf (_("symbol '%s' not found in the shared cache\n"),
++		name.c_str ());
++}
++
+ INIT_GDB_FILE (darwin_nat)
+ {
+   kern_return_t kret;
+@@ -3651,6 +3700,11 @@ the first non-system image added by dyld, so that pending breakpoints can be\n\
+ resolved before a constructor calls into the newly loaded library."),
+ 			   NULL, NULL, &setlist, &showlist);
+ 
++  add_cmd ("darwin-shared-symbol", class_info, darwin_shared_symbol_command,
++	   _("Find an exported symbol in the dyld shared cache.\n\
++Usage: darwin-shared-symbol NAME [PATH-FILTER]"),
++	   &cmdlist);
++
+   add_cmd ("darwin-shared-cache", class_info, darwin_shared_cache_command,
+ 	   _("Print the dyld shared cache images and symbol counts.\n\
+ With an argument, only images whose path contains it are shown."),
