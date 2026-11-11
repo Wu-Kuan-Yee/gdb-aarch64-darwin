@@ -39,6 +39,8 @@ revision and are applied in the order listed in `series` with
 | `0030` | `gdb/darwin-nat.c` | Give the generated cache symbol file a `.text` section address |
 | `0031` | `gdb/darwin-nat.c` | Load cache symbols through `add-symbol-file` so sections are registered |
 | `0032` | `gdb/darwin-nat.c` | Load shared-cache export names by default |
+| `0033` | `gdb/darwin-nat.c`, `gdb/solib-darwin.c`, `gdb/solib-darwin.h` | Write `main bin spec` and `all image infos` LC_NOTEs into cores, listing every on-disk image with its segments |
+| `0034` | `gdb/darwin-nat.c` | Read `main bin spec` from a core and load the executable and its symbols automatically |
 
 
 ## Applying with a three-way merge

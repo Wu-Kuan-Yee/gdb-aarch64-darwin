@@ -1,0 +1,57 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 5da115b7fdc..e7745642ed3 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -28,6 +28,7 @@
+ #include "cli/cli-cmds.h"
+ #include "cli/cli-style.h"
+ #include "gdbcore.h"
++#include "exec.h"
+ #include "gdbthread.h"
+ #include "regcache.h"
+ #include "thread-iter.h"
+@@ -1580,6 +1581,7 @@ darwin_core_open (const char *filename, int from_tty)
+ 
+   std::vector<darwin_core_segment> segments;
+   std::vector<darwin_core_thread> threads;
++  std::string main_path;
+ 
+   size_t off = 32;
+   for (uint32_t i = 0; i < ncmds && off + 8 <= 32 + sizeofcmds; i++)
+@@ -1599,6 +1601,23 @@ darwin_core_open (const char *filename, int from_tty)
+ 	  if (seg.fileoff + seg.filesize <= size && seg.size != 0)
+ 	    segments.push_back (seg);
+ 	}
++      else if (cmd == 0x31 && cmdsize >= 40)		/* LC_NOTE */
++	{
++	  char owner[17] = {};
++	  memcpy (owner, data + off + 8, 16);
++	  uint64_t note_off = rd64 (off + 24);
++	  uint64_t note_size = rd64 (off + 32);
++	  if (strcmp (owner, "main bin spec") == 0
++	      && note_off <= size && note_size <= size - note_off
++	      && note_size > 48)
++	    {
++	      const char *path = (const char *) data + note_off + 48;
++	      size_t max = note_size - 48;
++	      size_t len = strnlen (path, max);
++	      if (len != 0 && len < max)
++		main_path.assign (path, len);
++	    }
++	}
+       else if ((cmd == 0x4 || cmd == 0x5) && cmdsize >= 16)	/* thread */
+ 	{
+ 	  uint32_t flavor = rd32 (off + 8);
+@@ -1627,7 +1646,11 @@ darwin_core_open (const char *filename, int from_tty)
+     }
+ 
+   if (current_program_space->exec_bfd () == nullptr)
+-    error (_("Load the executable before opening a Mach-O core file."));
++    {
++      if (main_path.empty ())
++	error (_("Load the executable before opening a Mach-O core file."));
++      try_open_exec_file (main_path.c_str (), current_inferior (), 0);
++    }
+ 
+   target_preopen (from_tty);
+   switch_to_no_thread ();

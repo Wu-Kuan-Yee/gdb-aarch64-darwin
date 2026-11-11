@@ -1,0 +1,341 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 966f1100acc..5da115b7fdc 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -2871,6 +2871,81 @@ darwin_nat_target::info_proc (const char *args, enum info_proc_what what)
+    thread with an ARM_THREAD_STATE64 register block.  Returns false when
+    the target is not a Darwin process or the file cannot be written.  */
+ 
++
++/* Description of one image for the self-describing core notes.  */
++
++struct darwin_core_image
++{
++  std::string path;
++  uint64_t load = 0;
++  uint32_t filetype = 0;
++  uint64_t text_vmaddr = 0;
++  uint8_t uuid[16] = {};
++  std::vector<std::pair<std::string, uint64_t>> segments;
++};
++
++static uint32_t
++darwin_core_u32 (const gdb_byte *p)
++{
++  return (uint32_t) p[0] | ((uint32_t) p[1] << 8)
++	 | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
++}
++
++static uint64_t
++darwin_core_u64 (const gdb_byte *p)
++{
++  return (uint64_t) darwin_core_u32 (p)
++	 | ((uint64_t) darwin_core_u32 (p + 4) << 32);
++}
++
++/* Read the load commands of the image at LOAD and fill CI.  */
++
++static bool
++darwin_core_read_image (uint64_t load, darwin_core_image *ci)
++{
++  gdb_byte hdr[32];
++  if (target_read_memory (load, hdr, sizeof (hdr)) != 0
++      || darwin_core_u32 (hdr) != 0xfeedfacf)
++    return false;
++
++  ci->load = load;
++  ci->filetype = darwin_core_u32 (hdr + 12);
++  uint32_t ncmds = darwin_core_u32 (hdr + 16);
++  uint32_t sizeofcmds = darwin_core_u32 (hdr + 20);
++  if (sizeofcmds > (1u << 20))
++    return false;
++
++  std::vector<gdb_byte> cmds (sizeofcmds);
++  if (sizeofcmds != 0
++      && target_read_memory (load + 32, cmds.data (), sizeofcmds) != 0)
++    return false;
++
++  size_t off = 0;
++  for (uint32_t i = 0; i < ncmds && off + 8 <= cmds.size (); i++)
++    {
++      uint32_t cmd = darwin_core_u32 (&cmds[off]);
++      uint32_t size = darwin_core_u32 (&cmds[off + 4]);
++      if (size < 8 || off + size > cmds.size ())
++	break;
++
++      if (cmd == 0x19 && size >= 72)	/* LC_SEGMENT_64 */
++	{
++	  char segname[17] = {};
++	  memcpy (segname, &cmds[off + 8], 16);
++	  uint64_t vmaddr = darwin_core_u64 (&cmds[off + 24]);
++	  ci->segments.emplace_back (segname, vmaddr);
++	  if (strcmp (segname, "__TEXT") == 0)
++	    ci->text_vmaddr = vmaddr;
++	}
++      else if (cmd == 0x1b && size >= 24)	/* LC_UUID */
++	memcpy (ci->uuid, &cmds[off + 8], 16);
++
++      off += size;
++    }
++
++  return true;
++}
++
+ bool
+ darwin_write_core_file (const char *filename)
+ {
+@@ -2955,6 +3030,47 @@ darwin_write_core_file (const char *filename)
+       threads.push_back (st);
+     }
+ 
++  /* Collect the images dyld reports.  Cache-only libraries have no file on
++     disk and are omitted: readers can still name their frames through the
++     generated symbol file, while a path that cannot be opened only makes
++     the core less useful.  */
++  std::vector<std::pair<CORE_ADDR, std::string>> dyld_images;
++  darwin_solib_get_all_images (dyld_images);
++  std::vector<darwin_core_image> images;
++  uint64_t exec_load = 0;
++  darwin_core_image exec_image;
++  bool have_exec = false;
++  const char *exec_path = current_program_space->exec_filename ();
++  std::string exec_base;
++  if (exec_path != nullptr)
++    {
++      const char *slash = strrchr (exec_path, '/');
++      exec_base = slash != nullptr ? slash + 1 : exec_path;
++    }
++
++  for (const auto &image : dyld_images)
++    {
++      if (image.second.empty () || access (image.second.c_str (), R_OK) != 0)
++	continue;
++      darwin_core_image ci;
++      if (!darwin_core_read_image (image.first, &ci))
++	continue;
++      ci.path = image.second;
++      images.push_back (ci);
++      const char *slash = strrchr (ci.path.c_str (), '/');
++      const char *base = slash != nullptr ? slash + 1 : ci.path.c_str ();
++      if (!have_exec
++	  && ((exec_path != nullptr && ci.path == exec_path)
++	      || (ci.filetype == 2 && exec_base == base)))
++	{
++	  have_exec = true;
++	  exec_image = ci;
++	  exec_load = image.first;
++	}
++    }
++  if (!have_exec)
++    exec_load = 0;
++
+   std::vector<uint8_t> cmds;
+   auto put32 = [&] (uint32_t v)
+     {
+@@ -2998,12 +3114,83 @@ darwin_write_core_file (const char *filename)
+     }
+   metadata += "]}";
+ 
++  /* main bin spec: version 2 layout, followed by the executable path for
++     readers that want to load the main binary automatically.  */
++  std::vector<uint8_t> main_spec;
++  auto ms32 = [&] (uint32_t v)
++    { for (int i = 0; i < 4; i++) main_spec.push_back ((v >> (8 * i)) & 0xff); };
++  auto ms64 = [&] (uint64_t v)
++    { for (int i = 0; i < 8; i++) main_spec.push_back ((v >> (8 * i)) & 0xff); };
++  ms32 (2);			/* version */
++  ms32 (4);			/* type: dyld_all_image_infos */
++  ms64 (have_exec ? exec_load : UINT64_MAX);
++  ms64 (have_exec ? exec_load - exec_image.text_vmaddr : UINT64_MAX);
++  for (int i = 0; i < 16; i++)
++    main_spec.push_back (have_exec ? exec_image.uuid[i] : 0);
++  ms32 (12);			/* log2 page size */
++  ms32 (1);			/* PLATFORM_MACOS */
++  if (exec_path != nullptr)
++    main_spec.insert (main_spec.end (), exec_path, exec_path + strlen (exec_path));
++  main_spec.push_back (0);
++
+   const uint32_t note_cmd_size = 40;
+   uint64_t note_off
+-    = (32 + cmds.size () + regions.size () * 72 + note_cmd_size + 15)
++    = (32 + cmds.size () + regions.size () * 72 + 3 * note_cmd_size + 15)
+       & ~((uint64_t) 15);
+-  uint64_t payload = (note_off + metadata.size () + 4095)
+-		     & ~((uint64_t) 4095);
++  uint64_t main_off = (note_off + metadata.size () + 15) & ~((uint64_t) 15);
++  uint64_t aii_off = (main_off + main_spec.size () + 15) & ~((uint64_t) 15);
++
++  /* all image infos payload: header, 48-byte entries, segment vmaddrs and
++     paths.  Offsets are absolute file offsets.  */
++  const uint32_t aii_header = 24;
++  const uint32_t aii_entry = 48;
++  const uint32_t aii_seg = 32;
++  uint64_t rel = aii_header + (uint64_t) images.size () * aii_entry;
++  std::vector<uint64_t> seg_offsets (images.size ()), path_offsets (images.size ());
++  for (size_t i = 0; i < images.size (); i++)
++    {
++      seg_offsets[i] = rel;
++      rel += images[i].segments.size () * aii_seg;
++      path_offsets[i] = rel;
++      rel += images[i].path.size () + 1;
++    }
++  std::vector<uint8_t> aii;
++  auto ai32 = [&] (uint32_t v)
++    { for (int i = 0; i < 4; i++) aii.push_back ((v >> (8 * i)) & 0xff); };
++  auto ai64 = [&] (uint64_t v)
++    { for (int i = 0; i < 8; i++) aii.push_back ((v >> (8 * i)) & 0xff); };
++  ai32 (1);
++  ai32 (images.size ());
++  ai64 (aii_off + aii_header);
++  ai32 (aii_entry);
++  ai32 (0);
++  for (size_t i = 0; i < images.size (); i++)
++    {
++      ai64 (aii_off + path_offsets[i]);
++      for (int j = 0; j < 16; j++)
++	aii.push_back (images[i].uuid[j]);
++      ai64 (images[i].load);
++      ai64 (aii_off + seg_offsets[i]);
++      ai32 (images[i].segments.size ());
++      ai32 (0);
++    }
++  for (size_t i = 0; i < images.size (); i++)
++    for (const auto &seg : images[i].segments)
++      {
++	char name[16] = {};
++	memcpy (name, seg.first.c_str (),
++		std::min<size_t> (seg.first.size (), 16));
++	aii.insert (aii.end (), name, name + 16);
++	ai64 (seg.second);
++	ai64 (0);
++      }
++  for (size_t i = 0; i < images.size (); i++)
++    {
++      aii.insert (aii.end (), images[i].path.begin (), images[i].path.end ());
++      aii.push_back (0);
++    }
++
++  uint64_t payload = (aii_off + aii.size () + 4095) & ~((uint64_t) 4095);
+   std::vector<uint64_t> fileoffs (regions.size ());
+   for (size_t i = 0; i < regions.size (); i++)
+     {
+@@ -3029,15 +3216,20 @@ darwin_write_core_file (const char *filename)
+       put32 (0);		/* flags */
+     }
+ 
+-  /* LC_NOTE command.  */
+-  put32 (0x31);			/* LC_NOTE */
+-  put32 (note_cmd_size);
+-  put32 (0x00626467);		/* "gdb" in the owner field */
+-  put32 (0);
+-  put32 (0);
+-  put32 (0);
+-  put64 (note_off);
+-  put64 (metadata.size ());
++  auto put_note = [&] (const char *owner, uint64_t off, uint64_t size)
++    {
++      put32 (0x31);		/* LC_NOTE */
++      put32 (note_cmd_size);
++      char name[16] = {};
++      memcpy (name, owner, std::min<size_t> (strlen (owner), 16));
++      for (int i = 0; i < 16; i++)
++	cmds.push_back ((uint8_t) name[i]);
++      put64 (off);
++      put64 (size);
++    };
++  put_note ("gdb", note_off, metadata.size ());
++  put_note ("main bin spec", main_off, main_spec.size ());
++  put_note ("all image infos", aii_off, aii.size ());
+ 
+   /* Mach header.  */
+   std::vector<uint8_t> header;
+@@ -3052,7 +3244,7 @@ darwin_write_core_file (const char *filename)
+   h32 (0x0100000c);		/* CPU_TYPE_ARM64 */
+   h32 (0);			/* CPU_SUBTYPE_ARM64_ALL */
+   h32 (4);			/* MH_CORE */
+-  h32 (threads.size () + regions.size () + 1);
++  h32 (threads.size () + regions.size () + 3);
+   h32 (cmds.size ());
+   h32 (0);			/* flags */
+   h32 (0);			/* reserved */
+@@ -3080,10 +3272,15 @@ darwin_write_core_file (const char *filename)
+ 
+   bool ok = write_all (header.data (), header.size ())
+ 	    && write_all (cmds.data (), cmds.size ());
+-  if (ok && lseek (fd, note_off, SEEK_SET) >= 0)
+-    ok = write_all (metadata.data (), metadata.size ());
+-  else
+-    ok = false;
++  auto write_at = [&] (uint64_t off, const void *data, size_t size)
++    {
++      if (!ok || lseek (fd, off, SEEK_SET) < 0)
++	return;
++      ok = write_all (data, size);
++    };
++  write_at (note_off, metadata.data (), metadata.size ());
++  write_at (main_off, main_spec.data (), main_spec.size ());
++  write_at (aii_off, aii.data (), aii.size ());
+ 
+   std::vector<uint8_t> buffer (64 * 1024);
+   for (size_t i = 0; ok && i < regions.size (); i++)
+diff --git a/gdb/solib-darwin.c b/gdb/solib-darwin.c
+index 894e3a8e7ac..341097da92b 100644
+--- a/gdb/solib-darwin.c
++++ b/gdb/solib-darwin.c
+@@ -427,6 +427,43 @@ darwin_get_dyld_bfd ()
+    current PC is at the entry of the dynamic linker.  */
+ 
+ 
++
++/* See solib-darwin.h.  */
++
++bool
++darwin_solib_get_all_images
++  (std::vector<std::pair<CORE_ADDR, std::string>> &images)
++{
++  type *ptr_type
++    = builtin_type (current_inferior ()->arch ())->builtin_data_ptr;
++  int ptr_len = ptr_type->length ();
++  unsigned int image_info_size = ptr_len * 3;
++  darwin_info *info = get_darwin_info (current_program_space);
++
++  darwin_load_image_infos (info);
++  if (!darwin_dyld_version_ok (info))
++    return false;
++
++  for (int i = 0; i < info->all_image.count; i++)
++    {
++      CORE_ADDR iinfo = info->all_image.info + i * image_info_size;
++      gdb::byte_vector buf (image_info_size);
++      if (target_read_memory (iinfo, buf.data (), image_info_size))
++	break;
++
++      CORE_ADDR load_addr = extract_typed_address (buf.data (), ptr_type);
++      CORE_ADDR path_addr
++	= extract_typed_address (buf.data () + ptr_len, ptr_type);
++      gdb::unique_xmalloc_ptr<char> path
++	= target_read_string (path_addr, SO_NAME_MAX_PATH_SIZE - 1);
++      if (path == nullptr)
++	continue;
++      images.emplace_back (load_addr, path.get ());
++    }
++
++  return true;
++}
++
+ /* See solib-darwin.h.  */
+ 
+ bool
+diff --git a/gdb/solib-darwin.h b/gdb/solib-darwin.h
+index bf4c50f38ad..260987b9cdc 100644
+--- a/gdb/solib-darwin.h
++++ b/gdb/solib-darwin.h
+@@ -39,3 +39,8 @@ extern void darwin_solib_install_notifier ();
+ 
+ /* Return the runtime load address of the image whose path is WANTED.  */
+ bool darwin_solib_get_image_address (const char *wanted, CORE_ADDR *addr);
++
++/* Collect every image dyld reports as (load address, path).  */
++
++bool darwin_solib_get_all_images
++  (std::vector<std::pair<CORE_ADDR, std::string>> &images);

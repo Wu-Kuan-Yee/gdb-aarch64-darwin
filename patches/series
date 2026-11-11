@@ -30,3 +30,5 @@
 0030-gdb-register-cache-symbol-sections.patch
 0031-gdb-use-add-symbol-file-for-cache.patch
 0032-gdb-enable-shared-cache-symbols-by-default.patch
+0033-gdb-core-self-describing-notes.patch
+0034-gdb-core-read-main-bin-spec.patch
