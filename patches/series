@@ -11,3 +11,4 @@
 0011-gdb-implement-info-proc-mappings.patch
 0012-gdb-locate-embedded-python-and-guile-runtimes.patch
 0013-gdb-use-bash-for-cached-bin-sh.patch
+0014-gdb-add-libcxx-pretty-printers.patch

@@ -1,0 +1,178 @@
+diff --git a/gdb/data-directory/Makefile.in b/gdb/data-directory/Makefile.in
+index 7257da9cd11..54f5e474b18 100644
+--- a/gdb/data-directory/Makefile.in
++++ b/gdb/data-directory/Makefile.in
+@@ -77,6 +77,7 @@ PYTHON_FILE_LIST = \
+ 	gdb/FrameDecorator.py \
+ 	gdb/FrameIterator.py \
+ 	gdb/frames.py \
++	gdb/libcxx.py \
+ 	gdb/missing_debug.py \
+ 	gdb/missing_objfile.py \
+ 	gdb/missing_files.py \
+diff --git a/gdb/python/lib/gdb/__init__.py b/gdb/python/lib/gdb/__init__.py
+index 1a4aefcd802..d06825714be 100644
+--- a/gdb/python/lib/gdb/__init__.py
++++ b/gdb/python/lib/gdb/__init__.py
+@@ -733,3 +733,8 @@ class StyleParameterSet:
+                 return module + "." + qualname
+ 
+         return "<" + full_typename(self) + " name='" + self._name + "'>"
++
++# libc++ does not carry a .debug_gdb_scripts section the way libstdc++
++# does, so load its pretty-printers explicitly.  Importing the module
++# registers them for every objfile.
++from . import libcxx  # noqa: F401,E402
+diff --git a/gdb/python/lib/gdb/libcxx.py b/gdb/python/lib/gdb/libcxx.py
+new file mode 100644
+index 00000000000..b13bc9cb762
+--- /dev/null
++++ b/gdb/python/lib/gdb/libcxx.py
+@@ -0,0 +1,147 @@
++# Pretty printers for libc++ (the C++ standard library used by clang on
++# macOS).  libc++ does not embed a .debug_gdb_scripts section, so these
++# printers are registered globally when GDB starts.
++
++import re
++
++import gdb
++import gdb.printing
++
++
++def _strip_typedefs(t):
++    while t.code == gdb.TYPE_CODE_TYPEDEF:
++        t = t.target()
++    return t
++
++
++class StringPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        val = self.val
++        rep = val["__rep_"]
++        short = rep["__s"]
++        if int(short["__is_long_"]) == 0:
++            size = int(short["__size_"])
++            if size == 0:
++                return '""'
++            data = short["__data_"].string(length=size)
++            return '"%s"' % data
++        long_rep = rep["__l"]
++        size = int(long_rep["__size_"])
++        if size == 0:
++            return '""'
++        data = long_rep["__data_"].string(length=size)
++        return '"%s"' % data
++
++
++class StringViewPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        val = self.val
++        size = int(val["__size_"])
++        if size == 0:
++            return '""'
++        data = val["__data_"].string(length=size)
++        return '"%s"' % data
++
++
++class VectorPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def _bounds(self):
++        val = self.val
++        begin = val["__begin_"]
++        end = val["__end_"]
++        return begin, end
++
++    def to_string(self):
++        begin, end = self._bounds()
++        n = int(end - begin)
++        return "std::__1::vector of length %d" % n
++
++    def children(self):
++        begin, end = self._bounds()
++        n = int(end - begin)
++        for i in range(n):
++            yield "[%d]" % i, (begin + i).dereference()
++
++
++class UniquePtrPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        ptr = self.val["__ptr_"]
++        # In current libc++ the compressed pair holding the pointer is
++        # transparent to the debug info and __ptr_ is already the pointer.
++        if ptr.type.code == gdb.TYPE_CODE_STRUCT:
++            ptr = ptr["__value_"]
++        if int(ptr) == 0:
++            return "std::__1::unique_ptr = nullptr"
++        return "std::__1::unique_ptr = %s" % ptr
++
++
++class SharedPtrPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        p = self.val["__ptr_"]
++        if int(p) == 0:
++            return "std::__1::shared_ptr = nullptr"
++        return "std::__1::shared_ptr = %s" % p
++
++
++class OptionalPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        try:
++            engaged = int(self.val["__engaged_"])
++        except gdb.error:
++            try:
++                engaged = int(self.val["__base_"])
++            except gdb.error:
++                engaged = 1
++        if not engaged:
++            return "std::__1::optional = (empty)"
++        try:
++            inner = self.val["__val_"]
++        except gdb.error:
++            inner = self.val["__base_"]["__val_"]
++        return "std::__1::optional = %s" % inner
++
++    def children(self):
++        try:
++            engaged = int(self.val["__engaged_"])
++        except gdb.error:
++            return
++        if engaged:
++            yield "value", self.val["__val_"]
++
++
++def _make_printers():
++    pp = gdb.printing.RegexpCollectionPrettyPrinter("libcxx")
++    pp.add_printer(
++        "string", r"^std::__1::basic_string<char,.*>$", StringPrinter
++    )
++    pp.add_printer(
++        "wstring", r"^std::__1::basic_string<wchar_t,.*>$", StringPrinter
++    )
++    pp.add_printer(
++        "string_view", r"^std::__1::basic_string_view<char,.*>$", StringViewPrinter
++    )
++    pp.add_printer("vector", r"^std::__1::vector<.*>$", VectorPrinter)
++    pp.add_printer("unique_ptr", r"^std::__1::unique_ptr<.*>$", UniquePtrPrinter)
++    pp.add_printer("shared_ptr", r"^std::__1::shared_ptr<.*>$", SharedPtrPrinter)
++    pp.add_printer("optional", r"^std::__1::optional<.*>$", OptionalPrinter)
++    return pp
++
++
++gdb.printing.register_pretty_printer(None, _make_printers(), replace=True)

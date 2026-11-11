@@ -20,6 +20,7 @@ revision and are applied in the order listed in `series` with
 | `0011` | `gdb/darwin-nat.c` | Implement `info proc mappings` with `mach_vm_region` and `proc_pidinfo` |
 | `0012` | `gdb/python/python.c`, `gdb/guile/guile.c` | Find bundled Python and Guile data through `GDB_EMBEDDED_ROOT` (no launcher script) |
 | `0013` | `gdb/darwin-nat.c` | Use `/bin/bash` when caching a shell: the arm64e-only `/bin/sh` copy dies with SIGTRAP under the debugger |
+| `0014` | `gdb/python/lib/gdb/libcxx.py`, `gdb/python/lib/gdb/__init__.py`, `gdb/data-directory/Makefile.in` | libc++ pretty-printers, loaded at startup because libc++ ships no `.debug_gdb_scripts` |
 
 ## Applying with a three-way merge
 
