@@ -86,6 +86,12 @@ A real fix needs one of:
 The first is days of work and does not depend on the cache parser; the
 second is cleaner but inherits the shared-cache project above.
 
+The helper has been prototyped (`support/darwin-solib-shim`): injected
+with `DYLD_INSERT_LIBRARIES`, it raises a trap when a non-system image is
+added, and a pending breakpoint on a function called from a constructor
+is then hit after one continue.  GDB still has to inject the dylib itself
+and consume the trap silently.
+
 ## Suggested order
 
 1. Finish the libc++ printers (map, set, unordered_map, tuple, variant).
