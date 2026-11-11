@@ -34,7 +34,8 @@ The smoke test in `tests/` exercises these on every build:
 | `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
 | C++ types, virtual dispatch, method arguments | works |
 | Python scripting | works when a Python with development headers is installed, or in the portable build; can also be linked statically with its runtime bundled (see docs/EMBEDDED.md) |
-| C++ pretty printing | libc++ (`std::__1`) printers for string, vector, unique_ptr, shared_ptr, optional and string_view are loaded automatically |
+| C++ pretty printing | libc++ (`std::__1`) printers for string, vector, map, set, unique_ptr, shared_ptr, optional and string_view are loaded automatically |
+| Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
 | Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
 | `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |

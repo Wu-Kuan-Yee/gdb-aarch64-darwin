@@ -520,6 +520,15 @@ else
 		make -C "${BUILD_DIR}" -j "${JOBS}" install-gdb
 fi
 
+# The early-image helper is a tiny dylib injected into inferiors; GDB
+# finds it next to its data files.
+SHIM_SRC="${SCRIPT_DIR}/support/darwin-solib-shim/gdbsolibshim.c"
+if [ -f "${SHIM_SRC}" ]; then
+	run mkdir -p -- "${PREFIX}/share/gdb"
+	run /usr/bin/cc -dynamiclib -O2 -o "${PREFIX}/share/gdb/gdbsolibshim.dylib" "${SHIM_SRC}"
+	run codesign --force --sign - "${PREFIX}/share/gdb/gdbsolibshim.dylib" 2>/dev/null || true
+fi
+
 INSTALLED_GDB="${PREFIX}/bin/gdb"
 if [ "${GAD_DRY_RUN}" -eq 0 ]; then
 	[ -x "${INSTALLED_GDB}" ] || die "installation finished but ${INSTALLED_GDB} is missing"

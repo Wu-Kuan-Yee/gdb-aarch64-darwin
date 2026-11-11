@@ -6,16 +6,13 @@
  * callback for newly added images and executes a breakpoint instruction
  * when a non-system image appears, so GDB stops inside dlopen, refreshes
  * its solib list and re-sets pending breakpoints before the constructor
- * calls into the new library.
- *
- * Prototype status: with the helper injected through
- * DYLD_INSERT_LIBRARIES, a pending breakpoint on a function called from a
- * constructor is hit after one continue.  The remaining work is to let
- * GDB inject the dylib itself and to consume the trap silently.
+ * calls into the new library.  GDB injects this dylib itself and discards
+ * the SIGUSR2 report, so the refresh happens without a visible stop.
  */
 
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -40,9 +37,13 @@ image_added (const struct mach_header *mh, intptr_t slide)
   if (dladdr ((const void *) mh, &info) == 0 || is_system_image (info.dli_fname))
     return;
 
-  /* Trap at a known instruction inside this dylib: GDB can recognize the
-     stop by its PC instead of guessing from the signal alone.  */
-  __asm__ volatile ("brk #0");
+  /* One report is enough: after this stop GDB has installed dyld's own
+     notifier, which covers all later additions.  */
+  enabled = 0;
+
+  /* GDB sets SIGUSR2 to nostop/noprint/nopass, so this stop is consumed
+     and the inferior continues after the solib refresh.  */
+  raise (SIGUSR2);
 }
 
 __attribute__((constructor)) static void

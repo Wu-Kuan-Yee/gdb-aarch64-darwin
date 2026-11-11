@@ -1,0 +1,99 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 9103f304bbe..6a3260c1bc5 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -128,6 +128,13 @@ static struct inferior *darwin_inf_fake_stop;
+    for details.  */
+ static const char *copied_shell;
+ 
++/* When true, a small helper dylib is injected into the inferior.  It
++   reports the first non-system image added by dyld, which lets GDB load
++   solibs before a constructor has a chance to call into a library that
++   was dlopen'ed during startup.  */
++static bool darwin_early_solib = true;
++static bool darwin_early_solib_injected;
++
+ #define PAGE_TRUNC(x) ((x) & ~(mach_page_size - 1))
+ #define PAGE_ROUND(x) PAGE_TRUNC((x) + mach_page_size - 1)
+ 
+@@ -2025,6 +2032,55 @@ caching a copy of your shell.  The shell used by \"%ps\" is now:\n\
+   return true;
+ }
+ 
++/* Return an environment with DYLD_INSERT_LIBRARIES extended by the
++   early-solib helper.  The storage has to outlive fork_inferior, hence
++   the static vectors.  */
++
++static char **
++darwin_early_solib_env (char **env)
++{
++  if (!darwin_early_solib)
++    return env;
++
++  std::string shim = gdb_datadir + "/gdbsolibshim.dylib";
++  if (access (shim.c_str (), R_OK) != 0)
++    return env;
++
++  static std::vector<std::string> vars;
++  static std::vector<char *> ptrs;
++
++  vars.clear ();
++  for (char **p = env; p != nullptr && *p != nullptr; p++)
++    vars.push_back (*p);
++
++  bool found = false;
++  const std::string prefix = "DYLD_INSERT_LIBRARIES=";
++  for (std::string &v : vars)
++    {
++      if (v.compare (0, prefix.size (), prefix) == 0)
++	{
++	  v += ":" + shim;
++	  found = true;
++	  break;
++	}
++    }
++  if (!found)
++    vars.push_back (prefix + shim);
++
++  ptrs.clear ();
++  for (std::string &v : vars)
++    ptrs.push_back (v.data ());
++  ptrs.push_back (nullptr);
++
++  /* The helper reports itself with SIGUSR2; let infrun discard it and
++     resume automatically, after the darwin wait hook has refreshed the
++     solib list.  */
++  execute_command ("handle SIGUSR2 nostop noprint nopass", 0);
++
++  darwin_early_solib_injected = true;
++  return ptrs.data ();
++}
++
+ void
+ darwin_nat_target::create_inferior (const char *exec_file,
+ 				    const std::string &allargs,
+@@ -2045,6 +2101,8 @@ darwin_nat_target::create_inferior (const char *exec_file,
+ 	}
+     }
+ 
++  env = darwin_early_solib_env (env);
++
+   /* Do the hard work.  */
+   fork_inferior (exec_file, allargs, env, darwin_ptrace_me,
+ 		 [the_target] (int pid)
+@@ -2617,6 +2675,15 @@ Show if printing inferior communication debugging statements."), NULL,
+ 			     NULL, NULL,
+ 			     &setdebuglist, &showdebuglist);
+ 
++  add_setshow_boolean_cmd ("darwin-early-solib", class_run,
++			   &darwin_early_solib, _("\
++Set whether a helper dylib reports early dlopen calls."), _("\
++Show whether a helper dylib reports early dlopen calls."), _("\
++When on, GDB injects a small helper into the inferior.  The helper reports\n\
++the first non-system image added by dyld, so that pending breakpoints can be\n\
++resolved before a constructor calls into the newly loaded library."),
++			   NULL, NULL, &setlist, &showlist);
++
+   add_setshow_boolean_cmd ("mach-exceptions", class_support,
+ 			   &enable_mach_exceptions, _("\
+ Set if mach exceptions are caught."), _("\

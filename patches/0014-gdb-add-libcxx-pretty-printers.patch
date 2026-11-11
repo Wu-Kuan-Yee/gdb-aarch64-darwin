@@ -25,7 +25,7 @@ index 1a4aefcd802..d06825714be 100644
 +from . import libcxx  # noqa: F401,E402
 diff --git a/gdb/python/lib/gdb/libcxx.py b/gdb/python/lib/gdb/libcxx.py
 new file mode 100644
-index 00000000000..50acab9a6fe
+index 00000000000..19003b0ea83
 --- /dev/null
 +++ b/gdb/python/lib/gdb/libcxx.py
 @@ -0,0 +1,289 @@
@@ -270,7 +270,7 @@ index 00000000000..50acab9a6fe
 +def _hash_node_type(val, kind):
 +    args = [str(t) for t in _template_args(val.type)]
 +    if kind == "unordered_map":
-+        value_type = "std::__1::pair<%s const, %s>" % (args[0], args[1])
++        value_type = "std::__1::__hash_value_type<%s, %s>" % (args[0], args[1])
 +    else:
 +        value_type = args[0]
 +    name = "std::__1::__hash_node<%s, void*>" % value_type

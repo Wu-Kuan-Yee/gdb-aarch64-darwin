@@ -239,7 +239,7 @@ class HashPrinter:
 def _hash_node_type(val, kind):
     args = [str(t) for t in _template_args(val.type)]
     if kind == "unordered_map":
-        value_type = "std::__1::pair<%s const, %s>" % (args[0], args[1])
+        value_type = "std::__1::__hash_value_type<%s, %s>" % (args[0], args[1])
     else:
         value_type = args[0]
     name = "std::__1::__hash_node<%s, void*>" % value_type

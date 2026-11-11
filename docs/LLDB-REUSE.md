@@ -68,34 +68,29 @@ Estimated effort: several weeks.
 
 ## Early dlopen
 
-This is independent of LLDB.  Current behaviour: at the exec stop
-`dyld_all_image_infos` is still empty, so the solib notifier is installed
-only at the next stop.  A constructor that calls `dlopen` therefore runs
-before GDB has seen the library, and a pending breakpoint on one of its
-functions is missed.
+This is independent of LLDB and is now implemented.
 
-A real fix needs one of:
+At the exec stop `dyld_all_image_infos` is still empty, so the solib
+notifier is installed only at the next stop; a constructor that calls
+`dlopen` therefore used to run before GDB had seen the library, and a
+pending breakpoint on one of its functions was missed.
 
-- an injected helper dylib that registers
-  `_dyld_register_func_for_add_image` and traps when a non-system image is
-  added, so GDB can stop inside `dlopen`, load the new solib and re-set
-  breakpoints before the constructor calls into it; or
-- enough shared-cache/export-trie support to put a breakpoint on `dlopen`
-  before the program runs and inspect its arguments when it fires.
+GDB now injects a small helper dylib (`support/darwin-solib-shim`)
+through `DYLD_INSERT_LIBRARIES` when starting an inferior.  The helper
+registers `_dyld_register_func_for_add_image`; when the first non-system
+image is added it raises `SIGUSR2` once.  GDB sets that signal to
+`nostop noprint nopass`, so infrun discards it and continues
+automatically; before that, the Darwin wait hook has refreshed the solib
+list and re-set pending breakpoints, which are therefore in place before
+the constructor calls into the new library.
 
-The first is days of work and does not depend on the cache parser; the
-second is cleaner but inherits the shared-cache project above.
-
-The helper has been prototyped (`support/darwin-solib-shim`): injected
-with `DYLD_INSERT_LIBRARIES`, it raises a trap when a non-system image is
-added, and a pending breakpoint on a function called from a constructor
-is then hit after one continue.  GDB still has to inject the dylib itself
-and consume the trap silently.
+`set darwin-early-solib off` disables both the injection and the
+behaviour, falling back to the old semantics.  The trade-off is that
+while the feature is on, an inferior's own `SIGUSR2` is also discarded;
+that is why the setting exists.
 
 ## Suggested order
 
-1. Finish the libc++ printers (map, set, unordered_map, tuple, variant).
-2. Early-dlopen fix through the add-image helper.
-3. Mach-O core writer plus reader (this also makes `gcore` useful).
-4. Shared cache parser, which also unlocks system-library symbols and the
-   `dlopen`-breakpoint variant of the early-dlopen fix.
+1. Finish the libc++ printers (tuple, variant; unordered_map is done).
+2. Mach-O core writer plus reader (this also makes `gcore` useful).
+3. Shared cache parser, which also unlocks system-library symbols.
