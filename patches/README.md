@@ -34,6 +34,11 @@ revision and are applied in the order listed in `series` with
 | `0025` | `gdb/darwin-nat.c` | Load common cached libraries' exports as minimal symbols from a generated Mach-O file (opt-in) |
 | `0026` | `gdb/darwin-nat.c` | Apply the runtime shared-cache slide to those symbols (opt-in) |
 | `0027` | `gdb/darwin-nat.c`, `gdb/solib-darwin.c`, `gdb/solib-darwin.h` | Compute the slide from dyld's runtime image address for libsystem_c |
+| `0028` | `gdb/aarch64-darwin-nat.c` | Mirror debug state with `task_set_state` as debugserver does |
+| `0029` | `gdb/aarch64-darwin-nat.c` | Use the kernel's real hardware breakpoint count (`hw.optional.breakpoint`) |
+| `0030` | `gdb/darwin-nat.c` | Give the generated cache symbol file a `.text` section address |
+| `0031` | `gdb/darwin-nat.c` | Load cache symbols through `add-symbol-file` so sections are registered |
+
 
 ## Applying with a three-way merge
 

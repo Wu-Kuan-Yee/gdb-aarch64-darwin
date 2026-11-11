@@ -1,0 +1,30 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 893be2c80f4..e5702004780 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3857,18 +3857,13 @@ darwin_shcache_load_symbols ()
+     }
+   close (fd);
+ 
+-  gdb_bfd_ref_ptr bfd = gdb_bfd_open (path, nullptr, -1);
+-  if (bfd == nullptr)
+-    {
+-      unlink (path);
+-      return;
+-    }
+-
+-  section_addr_info addrs;
+-  addrs.emplace_back (0x180000000 + slide, ".text", -1);
+-  symbol_file_add_from_bfd (bfd, path, (symfile_add_flags) 0, &addrs,
+-			    (objfile_flags) (OBJF_USERLOADED | OBJF_SHARED),
+-			    nullptr);
++  /* The command path knows how to relocate the text section; the direct
++     symbol_file_add_from_bfd call left the synthetic objfile without
++     sections on this target.  */
++  std::string command
++    = string_printf ("add-symbol-file %s 0x%lx", path,
++		     (unsigned long) (0x180000000 + slide));
++  execute_command (command.c_str (), 0);
+   unlink (path);
+ }
+ 

@@ -1,0 +1,31 @@
+diff --git a/gdb/aarch64-darwin-nat.c b/gdb/aarch64-darwin-nat.c
+index aae142c3259..806c875d5fb 100644
+--- a/gdb/aarch64-darwin-nat.c
++++ b/gdb/aarch64-darwin-nat.c
+@@ -29,6 +29,7 @@
+ #include <mach/arm/exception.h>
+ #include <mach/arm/thread_status.h>
+ #include <stdint.h>
++#include <sys/sysctl.h>
+ 
+ /* The Darwin ARM64 thread-state structures use the UNIX03 spelling when
+    GDB is compiled against the current macOS SDK.  Keep the non-UNIX03 form
+@@ -560,7 +561,17 @@ INIT_GDB_FILE (aarch64_darwin_nat)
+ {
+   add_inf_child_target (&darwin_target);
+   aarch64_initialize_hw_point ();
+-  aarch64_num_bp_regs = AARCH64_HBP_MAX_NUM;
++
++  /* The kernel knows how many breakpoint and watchpoint resources this
++     CPU implements.  Using the architectural maximum makes the generic
++     allocator pick an unimplemented high slot.  */
++  int n = 0;
++  size_t len = sizeof (n);
++  if (sysctlbyname ("hw.optional.breakpoint", &n, &len, nullptr, 0) == 0
++      && n > 0)
++    aarch64_num_bp_regs = std::min (n, AARCH64_HBP_MAX_NUM);
++  else
++    aarch64_num_bp_regs = 4;
+   /* arm_debug_state64_t exposes sixteen slots, but Apple Silicon implements
+      four user watchpoint resources.  Keeping the generic maximum here makes
+      its free-slot search select an unimplemented high slot.  */

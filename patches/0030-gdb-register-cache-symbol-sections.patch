@@ -1,0 +1,12 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 44cbd067cd8..893be2c80f4 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3865,6 +3865,7 @@ darwin_shcache_load_symbols ()
+     }
+ 
+   section_addr_info addrs;
++  addrs.emplace_back (0x180000000 + slide, ".text", -1);
+   symbol_file_add_from_bfd (bfd, path, (symfile_add_flags) 0, &addrs,
+ 			    (objfile_flags) (OBJF_USERLOADED | OBJF_SHARED),
+ 			    nullptr);

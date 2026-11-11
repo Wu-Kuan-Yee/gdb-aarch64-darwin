@@ -25,3 +25,7 @@
 0025-gdb-load-shared-cache-symbols.patch
 0026-gdb-apply-shared-cache-slide.patch
 0027-gdb-compute-cache-slide-from-dyld.patch
+0028-gdb-set-task-level-debug-state.patch
+0029-gdb-use-real-hw-breakpoint-count.patch
+0030-gdb-register-cache-symbol-sections.patch
+0031-gdb-use-add-symbol-file-for-cache.patch

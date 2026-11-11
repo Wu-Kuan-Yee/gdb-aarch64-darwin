@@ -1,0 +1,25 @@
+diff --git a/gdb/aarch64-darwin-nat.c b/gdb/aarch64-darwin-nat.c
+index dd8b4c5ea10..aae142c3259 100644
+--- a/gdb/aarch64-darwin-nat.c
++++ b/gdb/aarch64-darwin-nat.c
+@@ -261,6 +261,20 @@ darwin_arm64_install_debug_state (thread_t thread,
+ 	       (unsigned long) thread, mach_error_string (ret));
+       return false;
+     }
++
++  /* Darwin also keeps a task-wide copy of the debug registers.  Debugserver
++     sets it whenever a hardware breakpoint or watchpoint changes; without
++     it BVR/BCR do not take effect.  */
++  darwin_inferior *inf = get_darwin_inferior (current_inferior ());
++  if (inf != nullptr && inf->task != MACH_PORT_NULL)
++    {
++      kern_return_t tret = task_set_state (inf->task, ARM_DEBUG_STATE64,
++					   (thread_state_t) &state, count);
++      if (tret != KERN_SUCCESS)
++	warning (_("task_set_state(ARM_DEBUG_STATE64) failed: %s\n"),
++		 mach_error_string (tret));
++    }
++
+   return true;
+ }
+ 
