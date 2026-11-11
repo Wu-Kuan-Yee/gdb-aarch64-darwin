@@ -34,11 +34,10 @@ The smoke test in `tests/` exercises these on every build:
 | `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
 | C++ types, virtual dispatch, method arguments | works |
 | Python scripting | works when a Python with development headers is installed, or in the portable build; can also be linked statically with its runtime bundled (see docs/EMBEDDED.md) |
-| C++ pretty printing | libc++ (`std::__1`) printers for string, vector, map, set, unique_ptr, shared_ptr, optional and string_view are loaded automatically |
+| C++ pretty printing | libc++ (`std::__1`) printers for string/string_view (all character widths), array, span, vector and vector<bool>, deque, list, forward_list, map/set and their multi variants, unordered containers, stack/queue/priority_queue, bitset, valarray, pair, tuple, optional, variant, unique/shared/weak_ptr, complex, chrono, initializer_list, atomic, filesystem::path and reference_wrapper are loaded automatically |
 | Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
 | Core files | `gcore` writes native Mach-O cores and GDB reads them back with its own `darwin-core` target |
-| Shared cache | `darwin-shared-cache` and `darwin-shared-symbol` parse the dyld shared cache, its subcaches and export tries; export names can be loaded as minimal symbols (`set darwin-shared-symbols on`) |
-| Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
+| Shared cache | `darwin-shared-cache` and `darwin-shared-symbol` parse the dyld shared cache, its subcaches and export tries; export names are loaded as minimal symbols by default, so `break printf` and `bt` name system-library frames |
 | `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |
 | `gdbstub` / remote debugging | not implemented by the upstream Darwin layer |
@@ -204,19 +203,14 @@ pin deliberately as described in `patches/README.md`.
   not available.
 - Hardware watchpoints are limited to the four ARM64 debug registers.
   GDB reports an error when a fifth is requested.
-- macOS keeps its system libraries in the dyld shared cache, with no file
-  on disk.  Debugging *inside* those libraries is therefore not possible:
-  frames in libsystem show no line information and sometimes cannot be
-  unwound.  User libraries and programs are unaffected.
-- The standard C++ library on macOS is libc++, for which GDB has no pretty
-  printers.  `print vector` shows the container's internal fields rather
-  than a formatted list; the types and values are still correct.
-- `gcore` needs a Mach-O core writer that GDB does not have; `lldb` can
-  save a core file if one is needed.
-- GDB learns the library list at the first stop.  A breakpoint on a
-  function in a library that is `dlopen`ed before the program reaches any
-  breakpoint stays pending; stop once (`start`) before continuing if a
-  library is loaded that early.
+- The dyld shared cache has no local symbols or unwind tables on a release
+  macOS, only export names.  GDB can therefore name system-library
+  functions and set breakpoints there (through the hardware breakpoint
+  registers), but it cannot show line numbers for them, and unwinding out
+  of a system-library frame may stop early.
+- Type-erased libc++ types (`std::function`, `std::any`) have no printable
+  value; the printers cover every libc++ type whose state is reachable
+  through its data members.
 - Attaching to hardened processes owned by other users is refused by macOS
   regardless of entitlements.
 - The port is a patch series, not an upstream submission; behaviour may

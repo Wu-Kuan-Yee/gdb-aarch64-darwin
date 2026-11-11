@@ -1,0 +1,13 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index e5702004780..966f1100acc 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -144,7 +144,7 @@ static bool darwin_early_solib = true;
+ static bool darwin_early_solib_injected;
+ 
+ /* Load export names of common cached libraries as minimal symbols.  */
+-static bool darwin_shcache_symbols = false;
++static bool darwin_shcache_symbols = true;
+ static bool darwin_shcache_symbols_loaded;
+ static void darwin_shcache_load_symbols ();
+ 

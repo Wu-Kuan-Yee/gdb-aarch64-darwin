@@ -20,7 +20,7 @@ revision and are applied in the order listed in `series` with
 | `0011` | `gdb/darwin-nat.c` | Implement `info proc mappings` with `mach_vm_region` and `proc_pidinfo` |
 | `0012` | `gdb/python/python.c`, `gdb/guile/guile.c` | Find bundled Python and Guile data through `GDB_EMBEDDED_ROOT` (no launcher script) |
 | `0013` | `gdb/darwin-nat.c` | Use `/bin/bash` when caching a shell: the arm64e-only `/bin/sh` copy dies with SIGTRAP under the debugger |
-| `0014` | `gdb/python/lib/gdb/libcxx.py`, `gdb/python/lib/gdb/__init__.py`, `gdb/data-directory/Makefile.in` | libc++ pretty-printers (string, vector, map, set, smart pointers, optional, string_view), loaded at startup because libc++ ships no `.debug_gdb_scripts` |
+| `0014` | `gdb/python/lib/gdb/libcxx.py`, `gdb/python/lib/gdb/__init__.py`, `gdb/data-directory/Makefile.in` | Comprehensive libc++ pretty-printers: strings in every character width, array/span/vector/vector\<bool\>/deque/list/forward_list, tree and hash containers with multi variants, adaptors, bitset, valarray, tuple/pair/variant/optional, smart pointers, complex, chrono, initializer_list, atomic, filesystem::path and reference_wrapper; loaded at startup because libc++ ships no `.debug_gdb_scripts` |
 | `0015` | `gdb/darwin-nat.c` | Inject the early-image helper, swallow its trap and refresh solibs before a startup constructor calls into a dlopen'ed library |
 | `0016` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/gcore.c` | Write Mach-O core files (`MH_CORE` + `LC_SEGMENT_64` + thread commands) from `gcore` |
 | `0017` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/corelow.c` | Read Mach-O cores back: a `darwin-core` target for memory, registers and threads |
@@ -38,6 +38,7 @@ revision and are applied in the order listed in `series` with
 | `0029` | `gdb/aarch64-darwin-nat.c` | Use the kernel's real hardware breakpoint count (`hw.optional.breakpoint`) |
 | `0030` | `gdb/darwin-nat.c` | Give the generated cache symbol file a `.text` section address |
 | `0031` | `gdb/darwin-nat.c` | Load cache symbols through `add-symbol-file` so sections are registered |
+| `0032` | `gdb/darwin-nat.c` | Load shared-cache export names by default |
 
 
 ## Applying with a three-way merge

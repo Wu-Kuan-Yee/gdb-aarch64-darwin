@@ -29,3 +29,4 @@
 0029-gdb-use-real-hw-breakpoint-count.patch
 0030-gdb-register-cache-symbol-sections.patch
 0031-gdb-use-add-symbol-file-for-cache.patch
+0032-gdb-enable-shared-cache-symbols-by-default.patch
