@@ -1,0 +1,25 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 1f9b7eeb4c3..9103f304bbe 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -1942,6 +1942,20 @@ maybe_cache_shell ()
+   copied_shell = nullptr;
+ 
+   const char *shell = get_shell ();
++
++  /* On Apple Silicon /bin/sh is a platform binary whose arm64 slice is
++     arm64e only.  A cached copy is no longer a platform binary, and
++     starting that copy under the debugger makes the child die with
++     SIGTRAP.  /bin/bash is a normal universal binary and runs the same
++     "-c" command, so use it instead.  */
++  if (strcmp (shell, "/bin/sh") == 0 && access ("/bin/bash", X_OK) == 0)
++    {
++      static const char bash_shell[] = "/bin/bash";
++
++      copied_shell = bash_shell;
++      return true;
++    }
++
+   if (!IS_ABSOLUTE_PATH (shell))
+     {
+       warning (_("This version of macOS has System Integrity Protection.\n\

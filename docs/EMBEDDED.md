@@ -105,8 +105,6 @@ directories from `GDB_EMBEDDED_ROOT`.
   `hashlib` and `lzma` work and are self-contained.
 - Guile's ports are not flushed when GDB exits; a Scheme script that
   prints should end with `(force-output)`.
-- GDB needs `SHELL` in the environment to start an inferior through the
-  shell. This is pre-existing behaviour, not specific to this build.
 - Rebuilding requires the staged prefixes under `.cache/embedded`; they
   are build inputs, not runtime dependencies.
 - The installed tree is about 137 MB: 23 MB debugger, 57 MB Python

@@ -441,11 +441,26 @@ if [ "${PORTABLE}" -eq 1 ]; then
 	CONFIGURE_ARGS[${#CONFIGURE_ARGS[@]}]=--without-debuginfod
 fi
 
+# Building the whole gdb target also builds bfd, whose info manual needs
+# makeinfo.  Texinfo is not otherwise required, so tell configure and make
+# the same thing when it is absent; configure treats MAKEINFO as a precious
+# variable and refuses to continue if the cached value differs.
+MAKEINFO_VAR=
+if ! have makeinfo; then
+	warn "makeinfo not found; skipping the generated manuals"
+	MAKEINFO_VAR="MAKEINFO=true"
+fi
+
 if [ "${RECONFIGURE}" -eq 1 ] || ! config_is_current; then
 	if [ -f "${BUILD_DIR}/config.status" ]; then
 		note "existing configure results do not match this prefix/source; reconfiguring"
 	fi
 	step "configuring"
+	# A build directory configured for another prefix, compiler or
+	# environment cannot be reused: sub-configures keep their own
+	# config.status and would be re-run with the old values, which
+	# autoconf rejects as a changed "precious" variable.  Start clean.
+	run rm -rf -- "${BUILD_DIR}"
 	run mkdir -p -- "${BUILD_DIR}" "${PREFIX}"
 	if [ "${GAD_DRY_RUN}" -eq 1 ]; then
 		print_command env \
@@ -454,6 +469,7 @@ if [ "${RECONFIGURE}" -eq 1 ] || ! config_is_current; then
 			"SDKROOT=${SDK}" \
 			"GMPINC=-I${GMP_PREFIX}/include -I${MPFR_PREFIX}/include" \
 			"GMPLIBS=-L${GMP_PREFIX}/lib -L${MPFR_PREFIX}/lib -lmpfr -lgmp" \
+			${MAKEINFO_VAR} \
 			"${SOURCE_DIR}/configure" "${CONFIGURE_ARGS[@]}"
 	else
 		status=0
@@ -465,6 +481,7 @@ if [ "${RECONFIGURE}" -eq 1 ] || ! config_is_current; then
 				"SDKROOT=${SDK}" \
 				"GMPINC=-I${GMP_PREFIX}/include -I${MPFR_PREFIX}/include" \
 				"GMPLIBS=-L${GMP_PREFIX}/lib -L${MPFR_PREFIX}/lib -lmpfr -lgmp" \
+				${MAKEINFO_VAR} \
 				"${SOURCE_DIR}/configure" "${CONFIGURE_ARGS[@]}"
 		) >"${BUILD_DIR}/configure.log" 2>&1 || status=$?
 		if [ "${status}" -ne 0 ]; then
@@ -478,12 +495,8 @@ else
 	ok "configure results are current"
 fi
 
-# Building the whole gdb target also builds bfd, whose info manual needs
-# makeinfo.  Texinfo is not otherwise required, so tell make to skip the
-# manual instead of failing the build when it is absent.
 MAKE_DOC_ARGS=()
-if ! have makeinfo; then
-	warn "makeinfo not found; skipping the generated manuals"
+if [ -n "${MAKEINFO_VAR}" ]; then
 	MAKE_DOC_ARGS[${#MAKE_DOC_ARGS[@]}]=MAKEINFO=true
 fi
 

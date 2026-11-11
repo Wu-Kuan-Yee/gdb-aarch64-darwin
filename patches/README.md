@@ -19,6 +19,7 @@ revision and are applied in the order listed in `series` with
 | `0010` | `gdb/aarch64-darwin-tdep.c` | Recognise Darwin signal frames through the ucontext pointer when the system libraries have no symbols |
 | `0011` | `gdb/darwin-nat.c` | Implement `info proc mappings` with `mach_vm_region` and `proc_pidinfo` |
 | `0012` | `gdb/python/python.c`, `gdb/guile/guile.c` | Find bundled Python and Guile data through `GDB_EMBEDDED_ROOT` (no launcher script) |
+| `0013` | `gdb/darwin-nat.c` | Use `/bin/bash` when caching a shell: the arm64e-only `/bin/sh` copy dies with SIGTRAP under the debugger |
 
 ## Applying with a three-way merge
 
