@@ -37,6 +37,7 @@ The smoke test in `tests/` exercises these on every build:
 | C++ pretty printing | libc++ (`std::__1`) printers for string, vector, map, set, unique_ptr, shared_ptr, optional and string_view are loaded automatically |
 | Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
 | Core files | `gcore` writes native Mach-O cores and GDB reads them back with its own `darwin-core` target |
+| Shared cache | `darwin-shared-cache` and `darwin-shared-symbol` parse the dyld shared cache, its subcaches and export tries; export names can be loaded as minimal symbols (`set darwin-shared-symbols on`) |
 | Core dumps (`gcore`, `core-file`) | not supported by the Darwin target |
 | `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |
