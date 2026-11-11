@@ -41,6 +41,8 @@ revision and are applied in the order listed in `series` with
 | `0032` | `gdb/darwin-nat.c` | Load shared-cache export names by default |
 | `0033` | `gdb/darwin-nat.c`, `gdb/solib-darwin.c`, `gdb/solib-darwin.h` | Write `main bin spec` and `all image infos` LC_NOTEs into cores, listing every on-disk image with its segments |
 | `0034` | `gdb/darwin-nat.c` | Read `main bin spec` from a core and load the executable and its symbols automatically |
+| `0035` | `gdb/darwin-nat.c` | Decode shared-cache compact unwind (`__unwind_info`) entries; `darwin-shared-unwind`/`darwin-shared-sections` diagnostics |
+| `0036` | `gdb/darwin-nat.c` | Frame unwinder for compact-unwind FRAME and FRAMELESS records |
 
 
 ## Applying with a three-way merge
