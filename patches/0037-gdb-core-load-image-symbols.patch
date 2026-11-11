@@ -1,0 +1,225 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 0cefeeee334..03a02ef6fff 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -1588,6 +1588,13 @@ darwin_core_open (const char *filename, int from_tty)
+   std::vector<darwin_core_segment> segments;
+   std::vector<darwin_core_thread> threads;
+   std::string main_path;
++  struct core_note_image
++  {
++    std::string path;
++    uint64_t load = 0;
++    uint64_t text_vmaddr = UINT64_MAX;
++  };
++  std::vector<core_note_image> note_images;
+ 
+   size_t off = 32;
+   for (uint32_t i = 0; i < ncmds && off + 8 <= 32 + sizeofcmds; i++)
+@@ -1623,6 +1630,47 @@ darwin_core_open (const char *filename, int from_tty)
+ 	      if (len != 0 && len < max)
+ 		main_path.assign (path, len);
+ 	    }
++	  else if (strcmp (owner, "all image infos") == 0
++		   && note_off <= size && note_size <= size - note_off
++		   && note_size >= 24)
++	    {
++	      uint32_t count = rd32 (note_off + 4);
++	      uint64_t entries = rd64 (note_off + 8);
++	      uint32_t entry_size = rd32 (note_off + 16);
++	      if (entry_size >= 48 && count < 4096)
++		for (uint32_t i = 0; i < count; i++)
++		  {
++		    uint64_t e = entries + (uint64_t) i * entry_size;
++		    if (e > size || size - e < 48)
++		      break;
++		    uint64_t path_off = rd64 (e);
++		    uint64_t load = rd64 (e + 24);
++		    uint64_t seg_off = rd64 (e + 32);
++		    uint32_t seg_count = rd32 (e + 40);
++		    uint64_t text_vmaddr = UINT64_MAX;
++		    for (uint32_t k = 0; k < seg_count; k++)
++		      {
++			uint64_t s = seg_off + (uint64_t) k * 32;
++			if (s > size || size - s < 32)
++			  break;
++			char segname[17] = {};
++			memcpy (segname, data + s, 16);
++			if (strcmp (segname, "__TEXT") == 0)
++			  {
++			    text_vmaddr = rd64 (s + 16);
++			    break;
++			  }
++		      }
++		    if (path_off >= size)
++		      continue;
++		    const char *path = (const char *) data + path_off;
++		    size_t len = strnlen (path, size - path_off);
++		    if (len == 0 || len == size - path_off)
++		      continue;
++		    note_images.push_back ({std::string (path, len), load,
++					    text_vmaddr});
++		  }
++	    }
+ 	}
+       else if ((cmd == 0x4 || cmd == 0x5) && cmdsize >= 16)	/* thread */
+ 	{
+@@ -1677,6 +1725,40 @@ darwin_core_open (const char *filename, int from_tty)
+   for (size_t i = 0; i < nthreads; i++)
+     add_thread_silent (inf->process_target (), ptid_t (pid, 0, i + 1));
+ 
++  /* Recreate the user libraries recorded in the core.  Cache-only images
++     have no file on disk and are skipped by the writer.  */
++  std::vector<std::string> loaded_paths;
++  if (main_path.size () != 0)
++    loaded_paths.push_back (main_path);
++  for (const core_note_image &image : note_images)
++    {
++      if (image.path.empty () || access (image.path.c_str (), R_OK) != 0)
++	continue;
++      bool duplicate = false;
++      for (const std::string &p : loaded_paths)
++	if (p == image.path)
++	  {
++	    duplicate = true;
++	    break;
++	  }
++      if (duplicate)
++	continue;
++      loaded_paths.push_back (image.path);
++      try
++	{
++	  uint64_t slide = (image.text_vmaddr != UINT64_MAX
++			    && image.load >= image.text_vmaddr)
++			   ? image.load - image.text_vmaddr : 0;
++	  std::string command
++	    = string_printf ("add-symbol-file %s -o 0x%llx", image.path.c_str (),
++			     (unsigned long long) slide);
++	  execute_command (command.c_str (), 0);
++	}
++      catch (const gdb_exception_error &)
++	{
++	}
++    }
++
+   struct thread_info *first = first_thread_of_inferior (inf);
+   if (first != nullptr)
+     switch_to_thread (first);
+@@ -2909,7 +2991,7 @@ struct darwin_core_image
+   std::string path;
+   uint64_t load = 0;
+   uint32_t filetype = 0;
+-  uint64_t text_vmaddr = 0;
++  uint64_t text_vmaddr = UINT64_MAX;
+   uint8_t uuid[16] = {};
+   std::vector<std::pair<std::string, uint64_t>> segments;
+ };
+@@ -3181,6 +3263,9 @@ darwin_write_core_file (const char *filename)
+     {
+       seg_offsets[i] = rel;
+       rel += images[i].segments.size () * aii_seg;
++    }
++  for (size_t i = 0; i < images.size (); i++)
++    {
+       path_offsets[i] = rel;
+       rel += images[i].path.size () + 1;
+     }
+@@ -4013,6 +4098,7 @@ static darwin_dsc_state darwin_cu_state;
+ static uint64_t darwin_cu_slide;
+ static bool darwin_cu_ready;
+ static bool darwin_cu_registered;
++static bool darwin_unwind_stack_scan = false;
+ 
+ static bool
+ darwin_cu_prepare ()
+@@ -4056,6 +4142,57 @@ darwin_cu_for_pc (CORE_ADDR pc, CORE_ADDR *func, uint32_t *encoding)
+   return true;
+ }
+ 
++
++static bool
++darwin_cu_pc_is_code (CORE_ADDR pc)
++{
++  CORE_ADDR func;
++  uint32_t enc;
++  if (darwin_cu_for_pc (pc, &func, &enc))
++    return true;
++  try
++    {
++      struct obj_section *section = find_pc_section (pc);
++      if (section != nullptr
++	  && (section->the_bfd_section->flags & SEC_CODE) != 0)
++	return true;
++    }
++  catch (const gdb_exception_error &)
++    {
++    }
++  return false;
++}
++
++/* Last resort for a FRAMELESS frame whose LR was clobbered: look for a
++   plausible return address in the first 512 bytes above SP.  */
++
++static bool
++darwin_cu_scan_stack (CORE_ADDR sp, CORE_ADDR *pc, CORE_ADDR *next_sp)
++{
++  for (CORE_ADDR off = 8; off <= 512; off += 8)
++    {
++      CORE_ADDR candidate = 0;
++      if (target_read_memory (sp + off, (gdb_byte *) &candidate, 8) != 0)
++	break;
++      if (candidate < 0x100000000 || (candidate & 3) != 0)
++	continue;
++      if (!darwin_cu_pc_is_code (candidate))
++	continue;
++      /* A return address follows a branch-with-link.  */
++      uint32_t insn = 0;
++      if (target_read_memory (candidate - 4, (gdb_byte *) &insn, 4) != 0)
++	continue;
++      bool call = (insn & 0xfc000000) == 0x94000000
++		  || (insn & 0xfffffc1f) == 0xd63f0000;
++      if (!call)
++	continue;
++      *pc = candidate;
++      *next_sp = sp + off + 8;
++      return true;
++    }
++  return false;
++}
++
+ static int
+ darwin_cu_sniffer (const struct frame_unwind *self,
+ 		   const frame_info_ptr &this_frame, void **this_cache)
+@@ -4106,10 +4243,15 @@ darwin_cu_sniffer (const struct frame_unwind *self,
+ 	}
+       catch (const gdb_exception_error &)
+ 	{
+-	  return 0;
++	  lr = 0;
++	}
++      if (lr == 0 || lr == pc)
++	{
++	  if (!darwin_unwind_stack_scan)
++	    return 0;
++	  if (!darwin_cu_scan_stack (sp, &lr, &prev_sp))
++	    return 0;
+ 	}
+-      if (lr == 0)
+-	return 0;
+     }
+   else				/* FRAME */
+     {
+@@ -4610,6 +4752,13 @@ the first non-system image added by dyld, so that pending breakpoints can be\n\
+ resolved before a constructor calls into the newly loaded library."),
+ 			   NULL, NULL, &setlist, &showlist);
+ 
++  add_setshow_boolean_cmd ("darwin-unwind-stack-scan", class_run,
++			   &darwin_unwind_stack_scan, _("\
++Set whether a FRAMELESS system-library frame may be recovered by scanning the stack."), _("\
++Show whether a FRAMELESS system-library frame may be recovered by scanning the stack."), _("\
++The scan is a heuristic and can invent frames; it is off by default."),
++			   NULL, NULL, &setlist, &showlist);
++
+   add_setshow_boolean_cmd ("darwin-shared-symbols", class_run,
+ 			   &darwin_shcache_symbols, _("\
+ Set whether shared-cache export names are loaded as minimal symbols."), _("\
