@@ -1,0 +1,124 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index ce5d194bddd..44cbd067cd8 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3685,42 +3685,29 @@ darwin_shared_symbol_command (const char *args, int from_tty)
+ 
+ 
+ 
+-/* Runtime slide of the shared cache: find the mapped cache header by
+-   its magic; its unslid address is the shared region base.  */
++/* Runtime slide of the shared cache: compare the cache's unslid address
++   for libsystem_c with the address dyld reports at run time.  */
+ 
+ static uint64_t
+ darwin_shcache_slide (const darwin_dsc_state &state)
+ {
+-  inferior *inf = current_inferior ();
+-  darwin_inferior *priv = get_darwin_inferior (inf);
+-  if (priv->task == MACH_PORT_NULL || inf->pid == 0)
+-    return 0;
++  const char *want = "/usr/lib/system/libsystem_c.dylib";
++  CORE_ADDR unslid = 0;
+ 
+-  mach_vm_address_t addr = 0;
+-  while (true)
+-    {
+-      mach_vm_size_t size = 0;
+-      vm_region_basic_info_data_64_t info;
+-      mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+-      mach_port_t object_name = MACH_PORT_NULL;
+-      kern_return_t kret
+-	= mach_vm_region (priv->task, &addr, &size, VM_REGION_BASIC_INFO_64,
+-			  (vm_region_info_t) &info, &count, &object_name);
+-      if (kret != KERN_SUCCESS)
++  for (const auto &img : state.images)
++    if (img.second == want)
++      {
++	unslid = img.first;
+ 	break;
++      }
++  if (unslid == 0)
++    return 0;
+ 
+-      if ((info.protection & VM_PROT_READ) != 0 && size >= 16)
+-	{
+-	  gdb_byte magic[16];
+-	  if (target_read_memory (addr, magic, sizeof (magic)) == 0
+-	      && memcmp (magic, "dyld_v1", 7) == 0)
+-	    return addr - 0x180000000;
+-	}
+-
+-      addr += size;
+-    }
++  CORE_ADDR runtime = 0;
++  if (!darwin_solib_get_image_address (want, &runtime))
++    return 0;
+ 
+-  return 0;
++  return runtime - unslid;
+ }
+ 
+ static void
+diff --git a/gdb/solib-darwin.c b/gdb/solib-darwin.c
+index 3d3e2bf9072..894e3a8e7ac 100644
+--- a/gdb/solib-darwin.c
++++ b/gdb/solib-darwin.c
+@@ -426,6 +426,46 @@ darwin_get_dyld_bfd ()
+ /* Extract dyld_all_image_addr when the process was just created, assuming the
+    current PC is at the entry of the dynamic linker.  */
+ 
++
++/* See solib-darwin.h.  */
++
++bool
++darwin_solib_get_image_address (const char *wanted, CORE_ADDR *addr)
++{
++  type *ptr_type
++    = builtin_type (current_inferior ()->arch ())->builtin_data_ptr;
++  int ptr_len = ptr_type->length ();
++  unsigned int image_info_size = ptr_len * 3;
++  darwin_info *info = get_darwin_info (current_program_space);
++
++  darwin_load_image_infos (info);
++  if (!darwin_dyld_version_ok (info))
++    return false;
++
++  for (int i = 0; i < info->all_image.count; i++)
++    {
++      CORE_ADDR iinfo = info->all_image.info + i * image_info_size;
++      gdb::byte_vector buf (image_info_size);
++      if (target_read_memory (iinfo, buf.data (), image_info_size))
++	return false;
++
++      CORE_ADDR load_addr = extract_typed_address (buf.data (), ptr_type);
++      CORE_ADDR path_addr
++	= extract_typed_address (buf.data () + ptr_len, ptr_type);
++      gdb::unique_xmalloc_ptr<char> path
++	= target_read_string (path_addr, SO_NAME_MAX_PATH_SIZE - 1);
++      if (path == nullptr)
++	return false;
++      if (strcmp (path.get (), wanted) == 0)
++	{
++	  *addr = load_addr;
++	  return true;
++	}
++    }
++
++  return false;
++}
++
+ static void
+ darwin_solib_get_all_image_info_addr_at_init (struct darwin_info *info)
+ {
+diff --git a/gdb/solib-darwin.h b/gdb/solib-darwin.h
+index 5ce42799610..bf4c50f38ad 100644
+--- a/gdb/solib-darwin.h
++++ b/gdb/solib-darwin.h
+@@ -36,3 +36,6 @@ extern bool darwin_solib_refresh ();
+ extern void darwin_solib_install_notifier ();
+ 
+ #endif /* GDB_SOLIB_DARWIN_H */
++
++/* Return the runtime load address of the image whose path is WANTED.  */
++bool darwin_solib_get_image_address (const char *wanted, CORE_ADDR *addr);

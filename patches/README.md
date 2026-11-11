@@ -32,7 +32,8 @@ revision and are applied in the order listed in `series` with
 | `0023` | `gdb/darwin-nat.c` | Walk each cached image's export trie (from the linkedit subcache) for symbol names and addresses |
 | `0024` | `gdb/darwin-nat.c` | `darwin-shared-symbol NAME [PATH-FILTER]`, a symbol lookup across the cache |
 | `0025` | `gdb/darwin-nat.c` | Load common cached libraries' exports as minimal symbols from a generated Mach-O file (opt-in) |
-| `0026` | `gdb/darwin-nat.c` | Apply the runtime shared-cache slide to those symbols (still being fixed; feature off by default) |
+| `0026` | `gdb/darwin-nat.c` | Apply the runtime shared-cache slide to those symbols (opt-in) |
+| `0027` | `gdb/darwin-nat.c`, `gdb/solib-darwin.c`, `gdb/solib-darwin.h` | Compute the slide from dyld's runtime image address for libsystem_c |
 
 ## Applying with a three-way merge
 
