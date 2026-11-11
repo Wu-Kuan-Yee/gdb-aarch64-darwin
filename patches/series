@@ -32,3 +32,5 @@
 0032-gdb-enable-shared-cache-symbols-by-default.patch
 0033-gdb-core-self-describing-notes.patch
 0034-gdb-core-read-main-bin-spec.patch
+0035-gdb-decode-compact-unwind.patch
+0036-gdb-compact-unwind-framewinder.patch

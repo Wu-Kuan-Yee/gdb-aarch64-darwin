@@ -1,0 +1,322 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index e7745642ed3..28c41f1ba83 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3807,6 +3807,301 @@ darwin_dsc_read_exports (const darwin_dsc_state &state, uint64_t image_addr,
+   return false;
+ }
+ 
++
++/* Decode the compact unwind entry that covers UNSLID in the shared cache.
++   This is a diagnostic step for the frame unwinder.  */
++
++static uint32_t
++dsc_u32 (const gdb_byte *p)
++{
++  return (uint32_t) p[0] | ((uint32_t) p[1] << 8)
++	 | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
++}
++
++static bool
++darwin_dsc_find_unwind_section (const darwin_dsc_state &state,
++				uint64_t image_addr, uint64_t slide,
++				uint64_t *section_addr, uint64_t *section_size)
++{
++  gdb_byte hdr[32];
++  if (target_read_memory (image_addr + slide, hdr, sizeof (hdr)) != 0)
++    return false;
++  uint32_t ncmds = dsc_u32 (hdr + 16);
++  uint32_t sizeofcmds = dsc_u32 (hdr + 20);
++  if (sizeofcmds > (1u << 20))
++    return false;
++
++  std::vector<gdb_byte> cmds (sizeofcmds);
++  if (sizeofcmds != 0
++      && target_read_memory (image_addr + slide + 32, cmds.data (),
++			     sizeofcmds) != 0)
++    return false;
++
++  size_t off = 0;
++  for (uint32_t i = 0; i < ncmds && off + 8 <= cmds.size (); i++)
++    {
++      uint32_t cmd = dsc_u32 (&cmds[off]);
++      uint32_t size = dsc_u32 (&cmds[off + 4]);
++      if (size < 8 || off + size > cmds.size ())
++	break;
++      if (cmd == 0x19 && size >= 72)
++	{
++	  uint32_t nsects = dsc_u32 (&cmds[off + 64]);
++	  size_t sp = off + 72;
++	  for (uint32_t k = 0; k < nsects && sp + 80 <= off + size; k++)
++	    {
++	      char sect[17] = {}, seg[17] = {};
++	      memcpy (sect, &cmds[sp], 16);
++	      memcpy (seg, &cmds[sp + 16], 16);
++	      if (strcmp (sect, "__unwind_info") == 0
++		  && strcmp (seg, "__TEXT") == 0)
++		{
++		  *section_addr = dsc_u32 (&cmds[sp + 32]) | 0;
++		  uint64_t lo = dsc_u32 (&cmds[sp + 32]);
++		  uint64_t hi = dsc_u32 (&cmds[sp + 36]);
++		  *section_addr = lo | (hi << 32);
++		  uint64_t slo = dsc_u32 (&cmds[sp + 40]);
++		  uint64_t shi = dsc_u32 (&cmds[sp + 44]);
++		  *section_size = slo | (shi << 32);
++		  return true;
++		}
++	      sp += 80;
++	    }
++	}
++      off += size;
++    }
++  return false;
++}
++
++static bool
++darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
++			  uint64_t slide, uint32_t *encoding,
++			  std::string *info)
++{
++  uint64_t image_addr = 0;
++  std::string image_path;
++  for (const auto &img : state.images)
++    if (img.first <= unslid && unslid - img.first < (1ull << 30)
++	&& img.first >= image_addr)
++      {
++	image_addr = img.first;
++	image_path = img.second;
++      }
++  if (image_addr == 0)
++    return false;
++
++  uint64_t sec_addr = 0, sec_size = 0;
++  if (!darwin_dsc_find_unwind_section (state, image_addr, slide,
++				       &sec_addr, &sec_size)
++      || sec_size < 32 || sec_size > (16u << 20))
++    return false;
++
++  std::vector<gdb_byte> data (sec_size);
++  if (target_read_memory (sec_addr + slide, data.data (), sec_size) != 0)
++    return false;
++
++  uint32_t common_off = dsc_u32 (&data[4]);
++  uint32_t common_count = dsc_u32 (&data[8]);
++  uint32_t pers_off = dsc_u32 (&data[12]);
++  uint32_t pers_count = dsc_u32 (&data[16]);
++  uint32_t index_off = dsc_u32 (&data[20]);
++  uint32_t index_count = dsc_u32 (&data[24]);
++  (void) pers_off; (void) pers_count;
++  if (index_off + index_count * 12u > data.size () || index_count == 0)
++    {
++      gdb_printf (_("dbg: bad index off=%x count=%u size=%zu\n"),
++		  index_off, index_count, data.size ());
++      return false;
++    }
++
++  uint32_t func_off = (uint32_t) (unslid - image_addr);
++  uint32_t index = 0;
++  uint32_t second = 0;
++  for (uint32_t i = 0; i < index_count; i++)
++    {
++      const gdb_byte *e = &data[index_off + i * 12];
++      uint32_t f = dsc_u32 (e);
++      if (f <= func_off)
++	{
++	  index = f;
++	  second = dsc_u32 (e + 4);
++	}
++      else
++	break;
++    }
++  gdb_printf (_("dbg: common=%x/%u index=%x/%u func=%x chosen index=%x second=%x\n"),
++	      common_off, common_count, index_off, index_count, func_off,
++	      index, second);
++  if (second == 0 || second >= data.size ())
++    return false;
++
++  uint32_t kind = dsc_u32 (&data[second]);
++  gdb_printf (_("dbg: kind=%u\n"), kind);
++  if (kind == 2)		/* REGULAR */
++    {
++      uint32_t entry_off = second + ((uint32_t) data[second + 4]
++				    | ((uint32_t) data[second + 5] << 8));
++      uint32_t entry_count = data[second + 6] | (data[second + 7] << 8);
++      for (uint32_t i = 0; i < entry_count; i++)
++	{
++	  uint32_t f = dsc_u32 (&data[entry_off + i * 8]);
++	  uint32_t enc = dsc_u32 (&data[entry_off + i * 8 + 4]);
++	  if (index + f <= func_off)
++	    {
++	      *encoding = enc;
++	      *info = string_printf ("%s func=%s page=regular entry=%u",
++				     image_path.c_str (),
++				     hex_string (image_addr + index + f), i);
++	    }
++	}
++      return *encoding != 0;
++    }
++  else if (kind == 3)	/* COMPRESSED */
++    {
++      uint32_t entry_off = second + ((uint32_t) data[second + 4]
++				    | ((uint32_t) data[second + 5] << 8));
++      uint32_t entry_count = data[second + 6] | (data[second + 7] << 8);
++      uint32_t enc_off = second + ((uint32_t) data[second + 8]
++				  | ((uint32_t) data[second + 9] << 8));
++      uint32_t enc_count = data[second + 10] | (data[second + 11] << 8);
++      uint32_t chosen = 0, chosen_func = 0;
++      bool found = false;
++      for (uint32_t i = 0; i < entry_count; i++)
++	{
++	  uint32_t entry = dsc_u32 (&data[entry_off + i * 4]);
++	  uint32_t f = entry & 0x00ffffff;
++	  uint32_t ei = (entry >> 24) & 0xff;
++	  if (index + f > func_off)
++	    break;
++	  if (ei < common_count)
++	    chosen = dsc_u32 (&data[common_off + ei * 4]);
++	  else if (ei - common_count < enc_count)
++	    chosen = dsc_u32 (&data[enc_off + (ei - common_count) * 4]);
++	  else
++	    continue;
++	  chosen_func = index + f;
++	  found = true;
++	}
++      if (!found)
++	return false;
++      *encoding = chosen;
++      *info = string_printf ("%s func=%s page=compressed entry=%u",
++			     image_path.c_str (), hex_string (image_addr
++						    + chosen_func), 0);
++      return true;
++    }
++  return false;
++}
++
++static void
++darwin_shared_unwind_command (const char *args, int from_tty)
++{
++  if (args == nullptr || *args == '\0')
++    error (_("usage: darwin-shared-unwind UNSLID-ADDRESS"));
++
++  CORE_ADDR addr = parse_and_eval_address (args);
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, state, 0);
++  uint64_t slide = darwin_shcache_slide (state);
++
++  uint64_t dbg_img = 0;
++  for (const auto &img : state.images)
++    if (img.first <= addr && addr - img.first < (1ull << 30)
++	&& img.first >= dbg_img)
++      dbg_img = img.first;
++  uint64_t dbg_sec = 0, dbg_size = 0;
++  bool dbg_ok = darwin_dsc_find_unwind_section (state, dbg_img, slide,
++						&dbg_sec, &dbg_size);
++  gdb_printf (_("debug: image=%s section=%s size=%s ok=%d func=%s\n"),
++	      hex_string (dbg_img), hex_string (dbg_sec), hex_string (dbg_size),
++	      dbg_ok, hex_string (addr - dbg_img));
++
++  uint32_t enc = 0;
++  std::string info;
++  if (!darwin_dsc_unwind_lookup (state, addr, slide, &enc, &info))
++    error (_("no compact unwind entry for %s"), hex_string (addr));
++
++  uint32_t mode = (enc >> 24) & 0xf;
++  const char *mname = mode == 2 ? "frameless" : mode == 3 ? "dwarf"
++		     : mode == 4 ? "frame" : "?";
++  gdb_printf (_("%s %s mode=%u(%s) encoding=0x%x\n"), info.c_str (),
++	      "compact-unwind", mode, mname, enc);
++}
++
++
++
++static void
++darwin_shared_sections_command (const char *args, int from_tty)
++{
++  if (args == nullptr || *args == '\0')
++    error (_("usage: darwin-shared-sections PATH-FILTER"));
++
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, state, 0);
++  uint64_t slide = darwin_shcache_slide (state);
++
++  for (const auto &img : state.images)
++    {
++      if (strstr (img.second.c_str (), args) == nullptr)
++	continue;
++
++      gdb_printf (_("%s %s slide=%s\n"), hex_string (img.first),
++		  img.second.c_str (), hex_string (slide));
++      gdb_byte hdr[32];
++      if (target_read_memory (img.first + slide, hdr, sizeof (hdr)) != 0)
++	{
++	  gdb_printf (_("  cannot read header\n"));
++	  return;
++	}
++      uint32_t ncmds = dsc_u32 (hdr + 16);
++      uint32_t sizeofcmds = dsc_u32 (hdr + 20);
++      std::vector<gdb_byte> cmds (sizeofcmds);
++      if (sizeofcmds > (1u << 20)
++	  || target_read_memory (img.first + slide + 32, cmds.data (),
++				 sizeofcmds) != 0)
++	return;
++
++      size_t off = 0;
++      for (uint32_t i = 0; i < ncmds && off + 8 <= cmds.size (); i++)
++	{
++	  uint32_t cmd = dsc_u32 (&cmds[off]);
++	  uint32_t size = dsc_u32 (&cmds[off + 4]);
++	  if (size < 8 || off + size > cmds.size ())
++	    break;
++	  if (cmd == 0x19 && size >= 72)
++	    {
++	      uint32_t nsects = dsc_u32 (&cmds[off + 64]);
++	      size_t sp = off + 72;
++	      for (uint32_t k = 0; k < nsects && sp + 80 <= off + size; k++)
++		{
++		  char sect[17] = {}, seg[17] = {};
++		  memcpy (sect, &cmds[sp], 16);
++		  memcpy (seg, &cmds[sp + 16], 16);
++		  uint64_t a = dsc_u32 (&cmds[sp + 32])
++			       | ((uint64_t) dsc_u32 (&cmds[sp + 36]) << 32);
++		  uint64_t z = dsc_u32 (&cmds[sp + 40])
++			       | ((uint64_t) dsc_u32 (&cmds[sp + 44]) << 32);
++		  gdb_printf ("  %s,%s addr=%s size=%s\n", seg, sect,
++			      hex_string (a), hex_string (z));
++		  sp += 80;
++		}
++	    }
++	  off += size;
++	}
++      return;
++    }
++}
++
+ static void
+ darwin_shared_cache_command (const char *args, int from_tty)
+ {
+@@ -4132,6 +4427,15 @@ Show whether shared-cache export names are loaded as minimal symbols."), NULL,
+ Usage: darwin-shared-symbol NAME [PATH-FILTER]"),
+ 	   &cmdlist);
+ 
++  add_cmd ("darwin-shared-unwind", class_info, darwin_shared_unwind_command,
++	   _("Show the compact unwind entry for an unslid cache address."),
++	   &cmdlist);
++
++  add_cmd ("darwin-shared-sections", class_info,
++	   darwin_shared_sections_command,
++	   _("List the Mach-O sections of a shared-cache image."),
++	   &cmdlist);
++
+   add_cmd ("darwin-shared-cache", class_info, darwin_shared_cache_command,
+ 	   _("Print the dyld shared cache images and symbol counts.\n\
+ With an argument, only images whose path contains it are shown."),

@@ -1,0 +1,321 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 28c41f1ba83..0cefeeee334 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -45,10 +45,15 @@
+ #include "inf-child.h"
+ #include "value.h"
+ #include "arch-utils.h"
++#include "aarch64-tdep.h"
++#include "frame-unwind.h"
++#include "trad-frame.h"
+ #include "bfd.h"
+ #include "bfd/mach-o.h"
+ #include "gdbarch.h"
+ 
++static void darwin_install_cu_unwinder ();
++
+ #include <copyfile.h>
+ #include <sys/ptrace.h>
+ #include <sys/signal.h>
+@@ -1373,6 +1378,7 @@ darwin_nat_target::wait (ptid_t ptid, struct target_waitstatus *status,
+       /* The cache is mapped once dyld is up, so this is the first
+ 	 point where its slide can be computed.  */
+       darwin_shcache_load_symbols ();
++      darwin_install_cu_unwinder ();
+     }
+ 
+   return res;
+@@ -1651,6 +1657,7 @@ darwin_core_open (const char *filename, int from_tty)
+ 	error (_("Load the executable before opening a Mach-O core file."));
+       try_open_exec_file (main_path.c_str (), current_inferior (), 0);
+     }
++  darwin_install_cu_unwinder ();
+ 
+   target_preopen (from_tty);
+   switch_to_no_thread ();
+@@ -3533,6 +3540,7 @@ struct darwin_dsc_state
+ };
+ 
+ static uint64_t darwin_shcache_slide (const darwin_dsc_state &state);
++static void darwin_install_cu_unwinder ();
+ 
+ static void
+ darwin_dsc_parse (const std::string &path, darwin_dsc_state &state, int depth)
+@@ -3876,7 +3884,7 @@ darwin_dsc_find_unwind_section (const darwin_dsc_state &state,
+ static bool
+ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+ 			  uint64_t slide, uint32_t *encoding,
+-			  std::string *info)
++			  std::string *info, uint64_t *func_start = nullptr)
+ {
+   uint64_t image_addr = 0;
+   std::string image_path;
+@@ -3909,8 +3917,6 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+   (void) pers_off; (void) pers_count;
+   if (index_off + index_count * 12u > data.size () || index_count == 0)
+     {
+-      gdb_printf (_("dbg: bad index off=%x count=%u size=%zu\n"),
+-		  index_off, index_count, data.size ());
+       return false;
+     }
+ 
+@@ -3929,14 +3935,10 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+       else
+ 	break;
+     }
+-  gdb_printf (_("dbg: common=%x/%u index=%x/%u func=%x chosen index=%x second=%x\n"),
+-	      common_off, common_count, index_off, index_count, func_off,
+-	      index, second);
+   if (second == 0 || second >= data.size ())
+     return false;
+ 
+   uint32_t kind = dsc_u32 (&data[second]);
+-  gdb_printf (_("dbg: kind=%u\n"), kind);
+   if (kind == 2)		/* REGULAR */
+     {
+       uint32_t entry_off = second + ((uint32_t) data[second + 4]
+@@ -3949,6 +3951,8 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+ 	  if (index + f <= func_off)
+ 	    {
+ 	      *encoding = enc;
++	      if (func_start != nullptr)
++		*func_start = image_addr + index + f;
+ 	      *info = string_printf ("%s func=%s page=regular entry=%u",
+ 				     image_path.c_str (),
+ 				     hex_string (image_addr + index + f), i);
+@@ -3985,6 +3989,8 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+       if (!found)
+ 	return false;
+       *encoding = chosen;
++      if (func_start != nullptr)
++	*func_start = image_addr + chosen_func;
+       *info = string_printf ("%s func=%s page=compressed entry=%u",
+ 			     image_path.c_str (), hex_string (image_addr
+ 						    + chosen_func), 0);
+@@ -3993,6 +3999,206 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+   return false;
+ }
+ 
++
++/* Frame unwinder using the shared cache's compact unwind tables.  */
++
++struct darwin_cu_cache
++{
++  trad_frame_saved_reg *saved_regs;
++  CORE_ADDR func;
++  bool available;
++};
++
++static darwin_dsc_state darwin_cu_state;
++static uint64_t darwin_cu_slide;
++static bool darwin_cu_ready;
++static bool darwin_cu_registered;
++
++static bool
++darwin_cu_prepare ()
++{
++  if (darwin_cu_ready)
++    return !darwin_cu_state.files.empty ();
++
++  darwin_cu_ready = true;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, darwin_cu_state, 0);
++  if (darwin_cu_state.files.empty ())
++    return false;
++  darwin_cu_slide = darwin_shcache_slide (darwin_cu_state);
++  return true;
++}
++
++static bool
++darwin_cu_for_pc (CORE_ADDR pc, CORE_ADDR *func, uint32_t *encoding)
++{
++  if (!darwin_cu_prepare ())
++    return false;
++
++  uint32_t enc = 0;
++  std::string info;
++  uint64_t start = 0;
++  if (pc < darwin_cu_slide)
++    return false;
++  uint64_t unslid = pc - darwin_cu_slide;
++  if (!darwin_dsc_unwind_lookup (darwin_cu_state, unslid, darwin_cu_slide,
++				 &enc, &info, &start))
++    return false;
++  uint32_t mode = (enc >> 24) & 0xf;
++  if (mode != 2 && mode != 4)	/* FRAMELESS or FRAME */
++    return false;
++  *func = start + darwin_cu_slide;
++  *encoding = enc;
++  return true;
++}
++
++static int
++darwin_cu_sniffer (const struct frame_unwind *self,
++		   const frame_info_ptr &this_frame, void **this_cache)
++{
++  (void) self;
++  if (this_cache == nullptr || *this_cache != nullptr)
++    return *this_cache != nullptr;
++
++  CORE_ADDR pc;
++  try
++    {
++      pc = get_frame_pc (this_frame);
++    }
++  catch (const gdb_exception_error &)
++    {
++      return 0;
++    }
++
++  CORE_ADDR func;
++  uint32_t encoding = 0;
++  if (!darwin_cu_for_pc (pc, &func, &encoding))
++    return 0;
++
++  CORE_ADDR fp = 0, sp = 0;
++  try
++    {
++      fp = get_frame_register_unsigned (this_frame, AARCH64_FP_REGNUM);
++      sp = get_frame_register_unsigned (this_frame, AARCH64_SP_REGNUM);
++    }
++  catch (const gdb_exception_error &)
++    {
++      return 0;
++    }
++
++  uint32_t mode = (encoding >> 24) & 0xf;
++  CORE_ADDR prev_fp = 0, lr = 0, prev_sp = 0;
++
++  if (mode == 2)		/* FRAMELESS */
++    {
++      uint32_t stack_size = ((encoding & 0x00fff000) >> 12) * 16;
++      if (sp == 0)
++	return 0;
++      prev_sp = sp + stack_size;
++      prev_fp = fp;
++      try
++	{
++	  lr = get_frame_register_unsigned (this_frame, AARCH64_LR_REGNUM);
++	}
++      catch (const gdb_exception_error &)
++	{
++	  return 0;
++	}
++      if (lr == 0)
++	return 0;
++    }
++  else				/* FRAME */
++    {
++      if (fp == 0 || sp == 0 || fp < sp || fp - sp > (1u << 20))
++	return 0;
++      if (target_read_memory (fp, (gdb_byte *) &prev_fp, 8) != 0
++	  || target_read_memory (fp + 8, (gdb_byte *) &lr, 8) != 0
++	  || lr == 0)
++	return 0;
++      prev_sp = fp + 16;
++    }
++
++  auto *cache = frame_obstack_zalloc<darwin_cu_cache> ();
++  cache->saved_regs = trad_frame_alloc_saved_regs (this_frame);
++  cache->func = func;
++  cache->available = true;
++  cache->saved_regs[AARCH64_FP_REGNUM].set_value (prev_fp);
++  cache->saved_regs[AARCH64_SP_REGNUM].set_value (prev_sp);
++  cache->saved_regs[AARCH64_PC_REGNUM].set_value (lr);
++  *this_cache = cache;
++  return 1;
++}
++
++static enum unwind_stop_reason
++darwin_cu_stop_reason (const frame_info_ptr &this_frame, void **this_cache)
++{
++  auto *cache = (darwin_cu_cache *) *this_cache;
++  if (cache == nullptr || !cache->available)
++    return UNWIND_UNAVAILABLE;
++  return UNWIND_NO_REASON;
++}
++
++static void
++darwin_cu_this_id (const frame_info_ptr &this_frame, void **this_cache,
++		   struct frame_id *this_id)
++{
++  auto *cache = (darwin_cu_cache *) *this_cache;
++  if (cache == nullptr || !cache->available)
++    *this_id = frame_id_build_unavailable_stack (cache != nullptr
++						  ? cache->func : 0);
++  else
++    {
++      CORE_ADDR sp = 0;
++      try
++	{
++	  sp = get_frame_register_unsigned (this_frame, AARCH64_SP_REGNUM);
++	}
++      catch (const gdb_exception_error &)
++	{
++	  sp = 0;
++	}
++      *this_id = frame_id_build (sp, cache->func);
++    }
++}
++
++static struct value *
++darwin_cu_prev_register (const frame_info_ptr &this_frame, void **this_cache,
++			 int prev_regnum)
++{
++  auto *cache = (darwin_cu_cache *) *this_cache;
++  if (cache == nullptr || !cache->available)
++    return frame_unwind_got_constant (this_frame, prev_regnum, 0);
++  return trad_frame_get_prev_register (this_frame, cache->saved_regs,
++				       prev_regnum);
++}
++
++static const frame_unwind_legacy darwin_cu_unwind (
++  "darwin compact unwind",
++  NORMAL_FRAME,
++  FRAME_UNWIND_ARCH,
++  darwin_cu_stop_reason,
++  darwin_cu_this_id,
++  darwin_cu_prev_register,
++  NULL,
++  darwin_cu_sniffer
++);
++
++static void
++darwin_install_cu_unwinder ()
++{
++  if (darwin_cu_registered || current_inferior () == nullptr
++      || current_inferior ()->arch () == nullptr)
++    return;
++  frame_unwind_prepend_unwinder (current_inferior ()->arch (),
++				 &darwin_cu_unwind);
++  darwin_cu_registered = true;
++}
++
++
+ static void
+ darwin_shared_unwind_command (const char *args, int from_tty)
+ {
+@@ -4009,18 +4215,6 @@ darwin_shared_unwind_command (const char *args, int from_tty)
+   darwin_dsc_parse (base, state, 0);
+   uint64_t slide = darwin_shcache_slide (state);
+ 
+-  uint64_t dbg_img = 0;
+-  for (const auto &img : state.images)
+-    if (img.first <= addr && addr - img.first < (1ull << 30)
+-	&& img.first >= dbg_img)
+-      dbg_img = img.first;
+-  uint64_t dbg_sec = 0, dbg_size = 0;
+-  bool dbg_ok = darwin_dsc_find_unwind_section (state, dbg_img, slide,
+-						&dbg_sec, &dbg_size);
+-  gdb_printf (_("debug: image=%s section=%s size=%s ok=%d func=%s\n"),
+-	      hex_string (dbg_img), hex_string (dbg_sec), hex_string (dbg_size),
+-	      dbg_ok, hex_string (addr - dbg_img));
+-
+   uint32_t enc = 0;
+   std::string info;
+   if (!darwin_dsc_unwind_lookup (state, addr, slide, &enc, &info))
