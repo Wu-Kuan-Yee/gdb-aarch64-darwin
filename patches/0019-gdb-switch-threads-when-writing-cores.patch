@@ -1,0 +1,20 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index f3a64db2330..67ba6cf58e0 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -2924,11 +2924,14 @@ darwin_write_core_file (const char *filename)
+       if (tp.inf != inf || tp.state () == THREAD_EXITED)
+ 	continue;
+ 
++      /* Registers are only fetched reliably for the current thread.  */
++      scoped_restore_current_thread restore_thread;
++      switch_to_thread (&tp);
++
+       struct regcache *regcache = get_thread_regcache (&tp);
+       if (regcache == nullptr)
+ 	continue;
+ 
+-      /* Non-current threads have empty register caches until fetched.  */
+       target_fetch_registers (regcache, -1);
+ 
+       auto regnum = [&] (const char *name)

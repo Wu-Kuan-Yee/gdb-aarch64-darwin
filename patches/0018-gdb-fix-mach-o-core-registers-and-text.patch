@@ -1,0 +1,26 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index d319be49630..f3a64db2330 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -1506,7 +1506,10 @@ darwin_core_target::xfer_partial (enum target_object object,
+       return TARGET_XFER_OK;
+     }
+ 
+-  return TARGET_XFER_E_IO;
++  /* Text and other file-backed pages are not in the core; let the exec
++     target serve them from the executable on disk.  */
++  return this->beneath ()->xfer_partial (object, annex, readbuf, writebuf,
++					 offset, len, xfered_len);
+ }
+ 
+ } /* namespace */
+@@ -2925,6 +2928,9 @@ darwin_write_core_file (const char *filename)
+       if (regcache == nullptr)
+ 	continue;
+ 
++      /* Non-current threads have empty register caches until fetched.  */
++      target_fetch_registers (regcache, -1);
++
+       auto regnum = [&] (const char *name)
+ 	{
+ 	  for (int r = 0; r < gdbarch_num_regs (gdbarch); r++)

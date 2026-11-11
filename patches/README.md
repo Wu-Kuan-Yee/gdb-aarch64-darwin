@@ -22,7 +22,12 @@ revision and are applied in the order listed in `series` with
 | `0013` | `gdb/darwin-nat.c` | Use `/bin/bash` when caching a shell: the arm64e-only `/bin/sh` copy dies with SIGTRAP under the debugger |
 | `0014` | `gdb/python/lib/gdb/libcxx.py`, `gdb/python/lib/gdb/__init__.py`, `gdb/data-directory/Makefile.in` | libc++ pretty-printers (string, vector, map, set, smart pointers, optional, string_view), loaded at startup because libc++ ships no `.debug_gdb_scripts` |
 | `0015` | `gdb/darwin-nat.c` | Inject the early-image helper, swallow its trap and refresh solibs before a startup constructor calls into a dlopen'ed library |
-| `0016` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/gcore.c` | Write Mach-O core files (`MH_CORE` + `LC_SEGMENT_64` + `LC_THREAD`) from `gcore` |
+| `0016` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/gcore.c` | Write Mach-O core files (`MH_CORE` + `LC_SEGMENT_64` + thread commands) from `gcore` |
+| `0017` | `gdb/darwin-nat.c`, `gdb/darwin-nat.h`, `gdb/corelow.c` | Read Mach-O cores back: a `darwin-core` target for memory, registers and threads |
+| `0018` | `gdb/darwin-nat.c` | Fetch thread registers before writing a core; serve text from the exec target |
+| `0019` | `gdb/darwin-nat.c` | Visit each thread while collecting registers for a core |
+| `0020` | `gdb/darwin-nat.c` | Use cooked register reads when writing cores |
+| `0021` | `gdb/darwin-nat.c` | Read thread state with `thread_get_state` instead of the thread regcaches |
 
 ## Applying with a three-way merge
 

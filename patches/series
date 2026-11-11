@@ -14,3 +14,8 @@
 0014-gdb-add-libcxx-pretty-printers.patch
 0015-gdb-report-early-dyld-image-additions.patch
 0016-gdb-write-mach-o-core-files.patch
+0017-gdb-read-mach-o-core-files.patch
+0018-gdb-fix-mach-o-core-registers-and-text.patch
+0019-gdb-switch-threads-when-writing-cores.patch
+0020-gdb-use-cooked-register-reads-for-cores.patch
+0021-gdb-dump-thread-state-from-mach.patch

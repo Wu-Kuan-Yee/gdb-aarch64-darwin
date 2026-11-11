@@ -1,0 +1,22 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 67ba6cf58e0..421faf3bbee 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -2949,7 +2949,7 @@ darwin_write_core_file (const char *filename)
+ 	  int r = regnum (name);
+ 	  ULONGEST value = 0;
+ 	  if (r >= 0
+-	      && regcache_raw_read_unsigned (regcache, r, &value) == 0)
++	      && regcache_cooked_read_unsigned (regcache, r, &value) == 0)
+ 	    *out = value;
+ 	};
+ 
+@@ -2969,7 +2969,7 @@ darwin_write_core_file (const char *filename)
+       int cpsr = regnum ("cpsr");
+       ULONGEST value = 0;
+       if (cpsr >= 0
+-	  && regcache_raw_read_unsigned (regcache, cpsr, &value) == 0)
++	  && regcache_cooked_read_unsigned (regcache, cpsr, &value) == 0)
+ 	st.cpsr = (uint32_t) value;
+ 
+       threads.push_back (st);

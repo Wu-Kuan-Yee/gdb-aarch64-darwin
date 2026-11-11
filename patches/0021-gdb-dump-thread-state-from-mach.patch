@@ -1,0 +1,90 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 421faf3bbee..30f9dc9b2db 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -34,9 +34,11 @@
+ #include <fcntl.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h>
++#include <mach/arm/thread_status.h>
+ #include "event-top.h"
+ #include "inf-loop.h"
+ #include <sys/stat.h>
++#include <mach/arm/thread_status.h>
+ #include "inf-child.h"
+ #include "value.h"
+ #include "arch-utils.h"
+@@ -2919,59 +2921,24 @@ darwin_write_core_file (const char *filename)
+   };
+   std::vector<thread_state> threads;
+ 
+-  for (struct thread_info &tp : all_threads ())
++  for (darwin_thread_t *thread : priv->threads)
+     {
+-      if (tp.inf != inf || tp.state () == THREAD_EXITED)
+-	continue;
+-
+-      /* Registers are only fetched reliably for the current thread.  */
+-      scoped_restore_current_thread restore_thread;
+-      switch_to_thread (&tp);
+-
+-      struct regcache *regcache = get_thread_regcache (&tp);
+-      if (regcache == nullptr)
++      arm_thread_state64_t ts;
++      mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
++      kern_return_t kret
++	= thread_get_state (thread->gdb_port, ARM_THREAD_STATE64,
++			    (thread_state_t) &ts, &count);
++      if (kret != KERN_SUCCESS)
+ 	continue;
+ 
+-      target_fetch_registers (regcache, -1);
+-
+-      auto regnum = [&] (const char *name)
+-	{
+-	  for (int r = 0; r < gdbarch_num_regs (gdbarch); r++)
+-	    {
+-	      const char *rn = gdbarch_register_name (gdbarch, r);
+-	      if (rn != nullptr && strcmp (rn, name) == 0)
+-		return r;
+-	    }
+-	  return -1;
+-	};
+-      auto read_reg = [&] (const char *name, uint64_t *out)
+-	{
+-	  int r = regnum (name);
+-	  ULONGEST value = 0;
+-	  if (r >= 0
+-	      && regcache_cooked_read_unsigned (regcache, r, &value) == 0)
+-	    *out = value;
+-	};
+-
+       thread_state st {};
+-      char name[8];
+-      for (int i = 0; i < 29; i++)
+-	{
+-	  xsnprintf (name, sizeof (name), "x%d", i);
+-	  read_reg (name, &st.x[i]);
+-	}
+-      read_reg ("x29", &st.fp);
+-      read_reg ("x30", &st.lr);
+-      read_reg ("sp", &st.sp);
+-      st.pc = regcache_read_pc (regcache);
+-      st.id = tp.ptid.tid ();
+-
+-      int cpsr = regnum ("cpsr");
+-      ULONGEST value = 0;
+-      if (cpsr >= 0
+-	  && regcache_cooked_read_unsigned (regcache, cpsr, &value) == 0)
+-	st.cpsr = (uint32_t) value;
+-
++      memcpy (st.x, ts.__x, sizeof (st.x));
++      st.fp = ts.__fp;
++      st.lr = ts.__lr;
++      st.sp = ts.__sp;
++      st.pc = ts.__pc;
++      st.cpsr = ts.__cpsr;
++      st.id = thread->gdb_port;
+       threads.push_back (st);
+     }
+ 

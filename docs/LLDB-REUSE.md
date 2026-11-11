@@ -39,25 +39,26 @@ reports the stopped thread and PC:
       pc = 0x0000000100000538
 ```
 
-It is not enough on its own, because GDB cannot read a Mach-O core today:
+GDB can now read these cores back.  BFD's generic core reader is ELF
+only (and on macOS its `prstatus_t` code is compiled out), so patch 0017
+adds a small `darwin-core` target: it parses `LC_SEGMENT_64` and the
+thread commands, serves memory from the core, supplies registers from
+the thread state blocks, and lets the exec target serve text pages that
+are not stored in the core.
 
 ```text
 (gdb) file hello
-(gdb) core-file /tmp/lldb.core
-"/tmp/lldb.core": Core file format not supported
+(gdb) core-file /tmp/macho.core
+Core file '/tmp/macho.core' loaded (Mach-O, 1 threads).
+(gdb) bt
+#0  main () at hello.c:4
+(gdb) info registers sp pc
+sp   0x16fdff590
+pc   0x100000538 <main+16>
 ```
 
-That message comes from BFD/GDB's generic core reader, which only knows
-ELF and a few other formats.  LLDB reads these files with its own
-`ProcessMachCore` plugin.  A complete `gcore` therefore needs:
-
-1. a Mach-O core **writer** in the Darwin native target;
-2. a Mach-O core **reader** integrated with GDB's core target (either a
-   new target in `corelow`-style code or a BFD `mach-o` core backend),
-   including `LC_SEGMENT_64` memory, `LC_THREAD` registers and thread
-   lists.
-
-Estimated total: two to four weeks for a solid implementation.
+The reader lives in `darwin-nat.c` alongside the writer and is selected
+from `core_file_command` by the Mach-O core magic.
 
 ## dyld shared cache
 
@@ -101,6 +102,7 @@ that is why the setting exists.
 
 ## Suggested order
 
-1. Mach-O core reader: a Darwin core target (or corelow integration) so
-   the core written by `gcore` can be opened by GDB itself.
+1. Improve the core format: store the executable's text and the image
+   list so cores are self-describing and symbolication works without the
+   original executable.
 2. Shared cache parser, which also unlocks system-library symbols.

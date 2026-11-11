@@ -1,0 +1,328 @@
+diff --git a/gdb/corelow.c b/gdb/corelow.c
+index 49031b29b2e..af89af19f2e 100644
+--- a/gdb/corelow.c
++++ b/gdb/corelow.c
+@@ -733,7 +733,15 @@ core_file_command (const char *filename, int from_tty)
+ 	maybe_say_no_core_file_now (from_tty);
+     }
+   else
+-    core_target_open (filename, from_tty);
++    {
++#if defined (__APPLE__)
++      extern bool darwin_core_open (const char *filename, int from_tty);
++
++      if (darwin_core_open (filename, from_tty))
++	return;
++#endif
++      core_target_open (filename, from_tty);
++    }
+ }
+ 
+ /* A vmcore file is a core file created by the Linux kernel at the point of
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index c5ea06a9f94..d319be49630 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -32,6 +32,8 @@
+ #include "regcache.h"
+ #include "thread-iter.h"
+ #include <fcntl.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
+ #include "event-top.h"
+ #include "inf-loop.h"
+ #include <sys/stat.h>
+@@ -1362,6 +1364,282 @@ darwin_nat_target::wait (ptid_t ptid, struct target_waitstatus *status,
+   return res;
+ }
+ 
++
++namespace {
++
++struct darwin_core_segment
++{
++  uint64_t addr;
++  uint64_t size;
++  uint64_t fileoff;
++  uint64_t filesize;
++};
++
++struct darwin_core_thread
++{
++  uint64_t x[29];
++  uint64_t fp;
++  uint64_t lr;
++  uint64_t sp;
++  uint64_t pc;
++  uint32_t cpsr;
++};
++
++static const target_info darwin_core_target_info = {
++  "darwin-core",
++  N_("Darwin Mach-O core file"),
++  N_("Use a Mach-O core file as a target.")
++};
++
++class darwin_core_target final : public process_stratum_target
++{
++public:
++  darwin_core_target (const gdb_byte *data, size_t size,
++		      std::vector<darwin_core_segment> &&segments,
++		      std::vector<darwin_core_thread> &&threads, int pid)
++    : m_data (data), m_size (size), m_segments (std::move (segments)),
++      m_threads (std::move (threads)), m_pid (pid)
++  {}
++
++  const target_info &info () const override
++  { return darwin_core_target_info; }
++
++  void close () override {}
++  void detach (inferior *, int) override {}
++
++  bool has_all_memory () override { return true; }
++  bool has_memory () override { return true; }
++  bool has_stack () override { return true; }
++  bool has_registers () override { return true; }
++  bool has_execution (inferior *) override { return false; }
++
++  bool thread_alive (ptid_t ptid) override
++  {
++    return ptid.pid () == m_pid
++	   && ptid.tid () > 0
++	   && (size_t) ptid.tid () <= m_threads.size ();
++  }
++
++  void fetch_registers (struct regcache *regcache, int regno) override;
++  enum target_xfer_status xfer_partial (enum target_object object,
++					const char *annex,
++					gdb_byte *readbuf,
++					const gdb_byte *writebuf,
++					ULONGEST offset, ULONGEST len,
++					ULONGEST *xfered_len) override;
++
++private:
++  const gdb_byte *m_data;
++  size_t m_size;
++  std::vector<darwin_core_segment> m_segments;
++  std::vector<darwin_core_thread> m_threads;
++  int m_pid;
++};
++
++static int
++darwin_core_regnum (struct gdbarch *gdbarch, const char *name)
++{
++  for (int r = 0; r < gdbarch_num_regs (gdbarch); r++)
++    {
++      const char *rn = gdbarch_register_name (gdbarch, r);
++      if (rn != nullptr && strcmp (rn, name) == 0)
++	return r;
++    }
++  return -1;
++}
++
++void
++darwin_core_target::fetch_registers (struct regcache *regcache, int regno)
++{
++  struct gdbarch *gdbarch = regcache->arch ();
++  int tid = inferior_thread ()->ptid.tid ();
++  if (tid <= 0 || (size_t) tid > m_threads.size ())
++    return;
++
++  const darwin_core_thread &st = m_threads[tid - 1];
++
++  auto supply = [&] (const char *name, const void *value)
++    {
++      int r = darwin_core_regnum (gdbarch, name);
++      if (r >= 0 && (regno == -1 || regno == r))
++	regcache->raw_supply (r, value);
++    };
++
++  char name[8];
++  for (int i = 0; i < 29; i++)
++    {
++      xsnprintf (name, sizeof (name), "x%d", i);
++      supply (name, &st.x[i]);
++    }
++  supply ("x29", &st.fp);
++  supply ("x30", &st.lr);
++  supply ("sp", &st.sp);
++  supply ("pc", &st.pc);
++  supply ("cpsr", &st.cpsr);
++}
++
++enum target_xfer_status
++darwin_core_target::xfer_partial (enum target_object object,
++				  const char *annex,
++				  gdb_byte *readbuf,
++				  const gdb_byte *writebuf,
++				  ULONGEST offset, ULONGEST len,
++				  ULONGEST *xfered_len)
++{
++  if (object != TARGET_OBJECT_MEMORY || writebuf != nullptr)
++    return TARGET_XFER_E_IO;
++
++  for (const darwin_core_segment &seg : m_segments)
++    {
++      if (offset < seg.addr || offset >= seg.addr + seg.size)
++	continue;
++
++      ULONGEST seg_off = offset - seg.addr;
++      ULONGEST n = std::min (len, seg.size - seg_off);
++      if (seg_off + n > seg.filesize)
++	n = seg.filesize - seg_off;
++      if (n == 0)
++	return TARGET_XFER_E_IO;
++
++      memcpy (readbuf, m_data + seg.fileoff + seg_off, n);
++      *xfered_len = n;
++      return TARGET_XFER_OK;
++    }
++
++  return TARGET_XFER_E_IO;
++}
++
++} /* namespace */
++
++/* Open a Mach-O core file as the current target.  Returns false when the
++   file is not a Mach-O core, leaving the current target untouched.  */
++
++bool
++darwin_core_open (const char *filename, int from_tty)
++{
++  int fd = open (filename, O_RDONLY);
++  if (fd < 0)
++    return false;
++
++  struct stat st;
++  if (fstat (fd, &st) != 0 || st.st_size < 32)
++    {
++      close (fd);
++      return false;
++    }
++
++  void *map = mmap (nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
++  close (fd);
++  if (map == MAP_FAILED)
++    return false;
++
++  const gdb_byte *data = (const gdb_byte *) map;
++  size_t size = st.st_size;
++
++  auto rd32 = [&] (size_t off)
++    {
++      return (uint32_t) data[off]
++	     | ((uint32_t) data[off + 1] << 8)
++	     | ((uint32_t) data[off + 2] << 16)
++	     | ((uint32_t) data[off + 3] << 24);
++    };
++  auto rd64 = [&] (size_t off)
++    {
++      return (uint64_t) rd32 (off) | ((uint64_t) rd32 (off + 4) << 32);
++    };
++
++  if (rd32 (0) != 0xfeedfacf || rd32 (12) != 4)
++    {
++      munmap (map, st.st_size);
++      return false;
++    }
++
++  uint32_t ncmds = rd32 (16);
++  uint32_t sizeofcmds = rd32 (20);
++  if (32 + sizeofcmds > size)
++    {
++      munmap (map, st.st_size);
++      return false;
++    }
++
++  std::vector<darwin_core_segment> segments;
++  std::vector<darwin_core_thread> threads;
++
++  size_t off = 32;
++  for (uint32_t i = 0; i < ncmds && off + 8 <= 32 + sizeofcmds; i++)
++    {
++      uint32_t cmd = rd32 (off);
++      uint32_t cmdsize = rd32 (off + 4);
++      if (cmdsize < 8 || off + cmdsize > size)
++	break;
++
++      if (cmd == 0x19 && cmdsize >= 72)		/* LC_SEGMENT_64 */
++	{
++	  darwin_core_segment seg;
++	  seg.addr = rd64 (off + 24);
++	  seg.size = rd64 (off + 32);
++	  seg.fileoff = rd64 (off + 40);
++	  seg.filesize = rd64 (off + 48);
++	  if (seg.fileoff + seg.filesize <= size && seg.size != 0)
++	    segments.push_back (seg);
++	}
++      else if ((cmd == 0x4 || cmd == 0x5) && cmdsize >= 16)	/* thread */
++	{
++	  uint32_t flavor = rd32 (off + 8);
++	  uint32_t count = rd32 (off + 12);
++	  if (flavor == 6 && count >= 68 && off + 16 + 272 <= size)
++	    {
++	      darwin_core_thread th {};
++	      size_t p = off + 16;
++	      for (int r = 0; r < 29; r++, p += 8)
++		th.x[r] = rd64 (p);
++	      th.fp = rd64 (p); p += 8;
++	      th.lr = rd64 (p); p += 8;
++	      th.sp = rd64 (p); p += 8;
++	      th.pc = rd64 (p); p += 8;
++	      th.cpsr = rd32 (p);
++	      threads.push_back (th);
++	    }
++	}
++      off += cmdsize;
++    }
++
++  if (segments.empty () || threads.empty ())
++    {
++      munmap (map, st.st_size);
++      return false;
++    }
++
++  if (current_program_space->exec_bfd () == nullptr)
++    error (_("Load the executable before opening a Mach-O core file."));
++
++  target_preopen (from_tty);
++  switch_to_no_thread ();
++  registers_changed ();
++
++  const int pid = 1;
++  size_t nthreads = threads.size ();
++  auto holder = target_ops_up
++    (new darwin_core_target (data, size, std::move (segments),
++			     std::move (threads), pid));
++  current_inferior ()->push_target (std::move (holder));
++
++  inferior *inf = current_inferior ();
++  inferior_appeared (inf, pid);
++  inf->fake_pid_p = true;
++
++  for (size_t i = 0; i < nthreads; i++)
++    add_thread_silent (inf->process_target (), ptid_t (pid, 0, i + 1));
++
++  struct thread_info *first = first_thread_of_inferior (inf);
++  if (first != nullptr)
++    switch_to_thread (first);
++
++  gdb_printf (_("Core file '%s' loaded (Mach-O, %zu threads).\n"),
++	      filename, nthreads);
++  return true;
++}
++
+ void
+ darwin_nat_target::interrupt ()
+ {
+diff --git a/gdb/darwin-nat.h b/gdb/darwin-nat.h
+index 5ac7c74de91..a65fa485b6c 100644
+--- a/gdb/darwin-nat.h
++++ b/gdb/darwin-nat.h
+@@ -223,3 +223,6 @@ void darwin_check_osabi (darwin_inferior *inf, thread_t thread);
+ 
+ /* Write a Mach-O core file for the current inferior (Darwin).  */
+ bool darwin_write_core_file (const char *filename);
++
++/* Open a Mach-O core file as a Darwin core target.  */
++bool darwin_core_open (const char *filename, int from_tty);
