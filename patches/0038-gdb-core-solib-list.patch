@@ -1,0 +1,162 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 03a02ef6fff..760b020f863 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -78,6 +78,7 @@ static void darwin_install_cu_unwinder ();
+ 
+ #include "darwin-nat.h"
+ #include "solib-darwin.h"
++#include "solib.h"
+ #include "filenames.h"
+ #include "gdbsupport/filestuff.h"
+ #include "gdbsupport/gdb_unlinker.h"
+@@ -1585,6 +1586,7 @@ darwin_core_open (const char *filename, int from_tty)
+       return false;
+     }
+ 
++  darwin_solib_clear_core_images ();
+   std::vector<darwin_core_segment> segments;
+   std::vector<darwin_core_thread> threads;
+   std::string main_path;
+@@ -1699,6 +1701,8 @@ darwin_core_open (const char *filename, int from_tty)
+       return false;
+     }
+ 
++
++
+   if (current_program_space->exec_bfd () == nullptr)
+     {
+       if (main_path.empty ())
+@@ -1722,41 +1726,29 @@ darwin_core_open (const char *filename, int from_tty)
+   inferior_appeared (inf, pid);
+   inf->fake_pid_p = true;
+ 
++  {
++    std::vector<std::pair<CORE_ADDR, std::string>> core_images;
++    for (const core_note_image &image : note_images)
++      core_images.emplace_back (image.load, image.path);
++    darwin_solib_set_core_images (core_images);
++  }
++
+   for (size_t i = 0; i < nthreads; i++)
+     add_thread_silent (inf->process_target (), ptid_t (pid, 0, i + 1));
+ 
+-  /* Recreate the user libraries recorded in the core.  Cache-only images
+-     have no file on disk and are skipped by the writer.  */
+-  std::vector<std::string> loaded_paths;
+-  if (main_path.size () != 0)
+-    loaded_paths.push_back (main_path);
+-  for (const core_note_image &image : note_images)
++  /* Recreate the libraries recorded in the core.  A core has no running
++     inferior, so install the architecture's solib provider here; the
++     solib code expands each path and relocates sections by the recorded
++     load address.  */
++  try
++    {
++      if (current_program_space->solib_ops ().empty ())
++	current_program_space->add_solib_ops
++	  (gdbarch_make_solib_ops (inf->arch (), current_program_space));
++      solib_add (nullptr, 0, 1);
++    }
++  catch (const gdb_exception_error &)
+     {
+-      if (image.path.empty () || access (image.path.c_str (), R_OK) != 0)
+-	continue;
+-      bool duplicate = false;
+-      for (const std::string &p : loaded_paths)
+-	if (p == image.path)
+-	  {
+-	    duplicate = true;
+-	    break;
+-	  }
+-      if (duplicate)
+-	continue;
+-      loaded_paths.push_back (image.path);
+-      try
+-	{
+-	  uint64_t slide = (image.text_vmaddr != UINT64_MAX
+-			    && image.load >= image.text_vmaddr)
+-			   ? image.load - image.text_vmaddr : 0;
+-	  std::string command
+-	    = string_printf ("add-symbol-file %s -o 0x%llx", image.path.c_str (),
+-			     (unsigned long long) slide);
+-	  execute_command (command.c_str (), 0);
+-	}
+-      catch (const gdb_exception_error &)
+-	{
+-	}
+     }
+ 
+   struct thread_info *first = first_thread_of_inferior (inf);
+@@ -2498,6 +2490,7 @@ darwin_nat_target::create_inferior (const char *exec_file,
+     no_executable_specified_error ();
+ 
+   darwin_shcache_symbols_loaded = false;
++  darwin_solib_clear_core_images ();
+ 
+   std::optional<scoped_restore_tmpl<bool>> restore_startup_with_shell;
+   darwin_nat_target *the_target = this;
+diff --git a/gdb/solib-darwin.c b/gdb/solib-darwin.c
+index 341097da92b..8febd13120e 100644
+--- a/gdb/solib-darwin.c
++++ b/gdb/solib-darwin.c
+@@ -34,6 +34,24 @@
+ #include "mach-o.h"
+ #include "mach-o/external.h"
+ 
++/* Images recorded in a core file, used by current_sos when there is no
++   live dyld to interrogate.  */
++
++static std::vector<std::pair<CORE_ADDR, std::string>> darwin_core_images;
++
++void
++darwin_solib_set_core_images
++  (const std::vector<std::pair<CORE_ADDR, std::string>> &images)
++{
++  darwin_core_images = images;
++}
++
++void
++darwin_solib_clear_core_images ()
++{
++  darwin_core_images.clear ();
++}
++
+ /* solib_ops for Darwin systems.  */
+ 
+ struct darwin_solib_ops : public solib_ops
+@@ -214,6 +232,21 @@ find_program_interpreter (void)
+ owning_intrusive_list<solib>
+ darwin_solib_ops::current_sos ()
+ {
++  if (!darwin_core_images.empty ())
++    {
++      owning_intrusive_list<solib> sos;
++      const char *exec = current_program_space->exec_filename ();
++      for (const auto &image : darwin_core_images)
++	{
++	  if (image.second.empty () || (exec != nullptr
++					&& image.second == exec))
++	    continue;
++	  sos.emplace_back (std::make_unique<lm_info_darwin> (image.first),
++			    image.second, image.second, *this);
++	}
++      return sos;
++    }
++
+   type *ptr_type
+     = builtin_type (current_inferior ()->arch ())->builtin_data_ptr;
+   enum bfd_endian byte_order = type_byte_order (ptr_type);
+diff --git a/gdb/solib-darwin.h b/gdb/solib-darwin.h
+index 260987b9cdc..d9acfbeaf43 100644
+--- a/gdb/solib-darwin.h
++++ b/gdb/solib-darwin.h
+@@ -44,3 +44,8 @@ bool darwin_solib_get_image_address (const char *wanted, CORE_ADDR *addr);
+ 
+ bool darwin_solib_get_all_images
+   (std::vector<std::pair<CORE_ADDR, std::string>> &images);
++
++/* Images recorded in a Mach-O core's all-image-infos note.  */
++extern void darwin_solib_set_core_images
++  (const std::vector<std::pair<CORE_ADDR, std::string>> &images);
++extern void darwin_solib_clear_core_images ();
