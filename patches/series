@@ -37,3 +37,4 @@
 0037-gdb-core-load-image-symbols.patch
 0038-gdb-core-solib-list.patch
 0039-gdb-frameless-prologue-analysis.patch
+0040-gdb-objfile-compact-unwind.patch

@@ -46,6 +46,7 @@ revision and are applied in the order listed in `series` with
 | `0037` | `gdb/darwin-nat.c` | Load user-library symbols from a core's `all image infos` note; opt-in stack scan for FRAMELESS frames |
 | `0038` | `gdb/solib-darwin.c`, `gdb/solib-darwin.h`, `gdb/darwin-nat.c` | Feed core images to `darwin_solib_ops::current_sos`, install the solib provider on core open, so `info sharedlibrary` lists core libraries |
 | `0039` | `gdb/darwin-nat.c` | Decode the arm64 prologue of a FRAMELESS frame (SP moves and x30 stores) to recover caller PC/SP deterministically |
+| `0040` | `gdb/darwin-nat.c` | Read `__TEXT.__unwind_info` from any Mach-O objfile, not just the shared cache; the diagnostic falls back to it |
 
 
 ## Applying with a three-way merge

@@ -1,0 +1,318 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index e7def7948ce..e0b4e83e7fc 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -3959,33 +3959,15 @@ darwin_dsc_find_unwind_section (const darwin_dsc_state &state,
+   return false;
+ }
+ 
++/* Decode one compact-unwind entry from the bytes of __unwind_info.
++   FUNC_OFF is relative to the image base; FUNC_START receives the entry's
++   function offset.  */
++
+ static bool
+-darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+-			  uint64_t slide, uint32_t *encoding,
+-			  std::string *info, uint64_t *func_start = nullptr)
++darwin_compact_lookup_bytes (const gdb_byte *data, size_t size,
++			     uint32_t func_off, uint32_t *encoding,
++			     uint32_t *func_start)
+ {
+-  uint64_t image_addr = 0;
+-  std::string image_path;
+-  for (const auto &img : state.images)
+-    if (img.first <= unslid && unslid - img.first < (1ull << 30)
+-	&& img.first >= image_addr)
+-      {
+-	image_addr = img.first;
+-	image_path = img.second;
+-      }
+-  if (image_addr == 0)
+-    return false;
+-
+-  uint64_t sec_addr = 0, sec_size = 0;
+-  if (!darwin_dsc_find_unwind_section (state, image_addr, slide,
+-				       &sec_addr, &sec_size)
+-      || sec_size < 32 || sec_size > (16u << 20))
+-    return false;
+-
+-  std::vector<gdb_byte> data (sec_size);
+-  if (target_read_memory (sec_addr + slide, data.data (), sec_size) != 0)
+-    return false;
+-
+   uint32_t common_off = dsc_u32 (&data[4]);
+   uint32_t common_count = dsc_u32 (&data[8]);
+   uint32_t pers_off = dsc_u32 (&data[12]);
+@@ -3993,12 +3975,11 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+   uint32_t index_off = dsc_u32 (&data[20]);
+   uint32_t index_count = dsc_u32 (&data[24]);
+   (void) pers_off; (void) pers_count;
+-  if (index_off + index_count * 12u > data.size () || index_count == 0)
++  if (index_off + index_count * 12u > size || index_count == 0)
+     {
+       return false;
+     }
+ 
+-  uint32_t func_off = (uint32_t) (unslid - image_addr);
+   uint32_t index = 0;
+   uint32_t second = 0;
+   for (uint32_t i = 0; i < index_count; i++)
+@@ -4013,7 +3994,7 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+       else
+ 	break;
+     }
+-  if (second == 0 || second >= data.size ())
++  if (second == 0 || second >= size)
+     return false;
+ 
+   uint32_t kind = dsc_u32 (&data[second]);
+@@ -4030,10 +4011,7 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+ 	    {
+ 	      *encoding = enc;
+ 	      if (func_start != nullptr)
+-		*func_start = image_addr + index + f;
+-	      *info = string_printf ("%s func=%s page=regular entry=%u",
+-				     image_path.c_str (),
+-				     hex_string (image_addr + index + f), i);
++		*func_start = index + f;
+ 	    }
+ 	}
+       return *encoding != 0;
+@@ -4068,15 +4046,141 @@ darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
+ 	return false;
+       *encoding = chosen;
+       if (func_start != nullptr)
+-	*func_start = image_addr + chosen_func;
+-      *info = string_printf ("%s func=%s page=compressed entry=%u",
+-			     image_path.c_str (), hex_string (image_addr
+-						    + chosen_func), 0);
++	*func_start = chosen_func;
+       return true;
+     }
+   return false;
+ }
+ 
++static bool
++darwin_dsc_unwind_lookup (const darwin_dsc_state &state, uint64_t unslid,
++			  uint64_t slide, uint32_t *encoding,
++			  std::string *info, uint64_t *func_start = nullptr)
++{
++  uint64_t image_addr = 0;
++  std::string image_path;
++  for (const auto &img : state.images)
++    if (img.first <= unslid && unslid - img.first < (1ull << 30)
++	&& img.first >= image_addr)
++      {
++	image_addr = img.first;
++	image_path = img.second;
++      }
++  if (image_addr == 0)
++    return false;
++
++  uint64_t sec_addr = 0, sec_size = 0;
++  if (!darwin_dsc_find_unwind_section (state, image_addr, slide,
++				       &sec_addr, &sec_size)
++      || sec_size < 32 || sec_size > (16u << 20))
++    return false;
++
++  std::vector<gdb_byte> data (sec_size);
++  if (target_read_memory (sec_addr + slide, data.data (), sec_size) != 0)
++    return false;
++
++  uint32_t off = 0;
++  if (!darwin_compact_lookup_bytes (data.data (), data.size (),
++				    (uint32_t) (unslid - image_addr),
++				    encoding, &off))
++    return false;
++
++  if (func_start != nullptr)
++    *func_start = image_addr + off;
++  *info = string_printf ("%s func=%s", image_path.c_str (),
++			 hex_string (image_addr + off));
++  return true;
++}
++
++/* Look up a compact-unwind entry for a runtime PC in any Mach-O objfile.  */
++
++static bool
++darwin_objfile_unwind_lookup (CORE_ADDR pc, uint32_t *encoding,
++			      CORE_ADDR *func_start)
++{
++  struct obj_section *osect = find_pc_section (pc);
++  if (osect == nullptr || osect->objfile == nullptr)
++    return false;
++
++  bfd *abfd = osect->objfile->obfd.get ();
++  if (abfd == nullptr)
++    return false;
++
++  asection *unwind = nullptr;
++  for (asection *sect = abfd->sections; sect != nullptr; sect = sect->next)
++    {
++      const char *name = bfd_section_name (sect);
++      if (name != nullptr && strstr (name, "unwind_info") != nullptr)
++	{
++	  unwind = sect;
++	  break;
++	}
++    }
++  if (unwind == nullptr)
++    return false;
++
++  bfd_size_type usize = bfd_section_size (unwind);
++  if (usize < 32 || usize > (16u << 20))
++    return false;
++  std::vector<gdb_byte> data (usize);
++  if (!bfd_get_section_contents (abfd, unwind, data.data (), 0, usize))
++    return false;
++
++  gdb_byte hdr[32];
++  if (bfd_seek (abfd, 0, SEEK_SET) != 0
++      || bfd_read (hdr, sizeof (hdr), abfd) != (int) sizeof (hdr)
++      || dsc_u32 (hdr) != 0xfeedfacf)
++    return false;
++  uint32_t ncmds = dsc_u32 (hdr + 16);
++  uint32_t sizeofcmds = dsc_u32 (hdr + 20);
++  if (sizeofcmds > (1u << 20))
++    return false;
++  std::vector<gdb_byte> cmds (sizeofcmds);
++  if (sizeofcmds != 0
++      && (bfd_seek (abfd, 32, SEEK_SET) != 0
++	  || bfd_read (cmds.data (), sizeofcmds, abfd)
++	     != (int) sizeofcmds))
++    return false;
++
++  uint64_t text_vmaddr = UINT64_MAX;
++  size_t p = 0;
++  for (uint32_t i = 0; i < ncmds && p + 8 <= cmds.size (); i++)
++    {
++      uint32_t cmd = dsc_u32 (&cmds[p]);
++      uint32_t size = dsc_u32 (&cmds[p + 4]);
++      if (size < 8 || p + size > cmds.size ())
++	break;
++      if (cmd == 0x19 && size >= 72)
++	{
++	  char name[17] = {};
++	  memcpy (name, &cmds[p + 8], 16);
++	  if (strcmp (name, "__TEXT") == 0)
++	    {
++	      text_vmaddr = dsc_u32 (&cmds[p + 24])
++			    | ((uint64_t) dsc_u32 (&cmds[p + 28]) << 32);
++	      break;
++	    }
++	}
++      p += size;
++    }
++  if (text_vmaddr == UINT64_MAX)
++    return false;
++
++  asection *text = osect->the_bfd_section;
++  uint64_t sec_vma = bfd_section_vma (text);
++  int64_t slide = (int64_t) osect->addr () - (int64_t) sec_vma;
++  uint64_t image_runtime = text_vmaddr + slide;
++  if (pc < image_runtime)
++    return false;
++
++  uint32_t off = 0;
++  if (!darwin_compact_lookup_bytes (data.data (), data.size (),
++				    (uint32_t) (pc - image_runtime),
++				    encoding, &off))
++    return false;
++  *func_start = image_runtime + off;
++  return true;
++}
+ 
+ /* Frame unwinder using the shared cache's compact unwind tables.  */
+ 
+@@ -4124,15 +4228,27 @@ darwin_cu_for_pc (CORE_ADDR pc, CORE_ADDR *func, uint32_t *encoding)
+   if (pc < darwin_cu_slide)
+     return false;
+   uint64_t unslid = pc - darwin_cu_slide;
+-  if (!darwin_dsc_unwind_lookup (darwin_cu_state, unslid, darwin_cu_slide,
+-				 &enc, &info, &start))
+-    return false;
+-  uint32_t mode = (enc >> 24) & 0xf;
+-  if (mode != 2 && mode != 4)	/* FRAMELESS or FRAME */
+-    return false;
+-  *func = start + darwin_cu_slide;
+-  *encoding = enc;
+-  return true;
++  if (darwin_dsc_unwind_lookup (darwin_cu_state, unslid, darwin_cu_slide,
++				&enc, &info, &start))
++    {
++      *func = start + darwin_cu_slide;
++      *encoding = enc;
++      return true;
++    }
++
++  CORE_ADDR obj_start = 0;
++  if (darwin_objfile_unwind_lookup (pc, &enc, &obj_start))
++    {
++      /* Only take over FRAMELESS user frames; frame-mode functions are
++	 better served by DWARF/prologue unwinders.  */
++      uint32_t mode = (enc >> 24) & 0xf;
++      if (mode != 2)
++	return false;
++      *func = obj_start;
++      *encoding = enc;
++      return true;
++    }
++  return false;
+ }
+ 
+ 
+@@ -4303,6 +4419,28 @@ darwin_cu_analyze_frameless (CORE_ADDR func, CORE_ADDR pc, CORE_ADDR entry_sp,
+   return true;
+ }
+ 
++
++static void
++darwin_analyze_frameless_command (const char *args, int from_tty)
++{
++  unsigned long func = 0, pc = 0, stack = 0;
++  if (args == nullptr
++      || sscanf (args, "%lx %lx %lx", &func, &pc, &stack) != 3)
++    error (_("usage: darwin-analyze-frameless FUNC PC STACK-SIZE"));
++
++  CORE_ADDR sp = get_frame_register_unsigned (get_current_frame (),
++					      AARCH64_SP_REGNUM);
++  CORE_ADDR caller = 0, caller_sp = 0;
++  if (!darwin_cu_analyze_frameless (func, pc, sp + stack,
++				    &caller, &caller_sp))
++    {
++      gdb_printf (_("no saved LR found\n"));
++      return;
++    }
++  gdb_printf (_("caller pc=%s sp=%s\n"), hex_string (caller),
++	      hex_string (caller_sp));
++}
++
+ static int
+ darwin_cu_sniffer (const struct frame_unwind *self,
+ 		   const frame_info_ptr &this_frame, void **this_cache)
+@@ -4481,7 +4619,12 @@ darwin_shared_unwind_command (const char *args, int from_tty)
+   uint32_t enc = 0;
+   std::string info;
+   if (!darwin_dsc_unwind_lookup (state, addr, slide, &enc, &info))
+-    error (_("no compact unwind entry for %s"), hex_string (addr));
++    {
++      CORE_ADDR obj_start = 0;
++      if (!darwin_objfile_unwind_lookup (addr, &enc, &obj_start))
++	error (_("no compact unwind entry for %s"), hex_string (addr));
++      info = string_printf ("objfile func=%s", hex_string (obj_start));
++    }
+ 
+   uint32_t mode = (enc >> 24) & 0xf;
+   const char *mname = mode == 2 ? "frameless" : mode == 3 ? "dwarf"
+@@ -4891,6 +5034,11 @@ Show whether shared-cache export names are loaded as minimal symbols."), NULL,
+ Usage: darwin-shared-symbol NAME [PATH-FILTER]"),
+ 	   &cmdlist);
+ 
++  add_cmd ("darwin-analyze-frameless", class_info,
++	   darwin_analyze_frameless_command,
++	   _("Run the FRAMELESS prologue analyzer on a function."),
++	   &cmdlist);
++
+   add_cmd ("darwin-shared-unwind", class_info, darwin_shared_unwind_command,
+ 	   _("Show the compact unwind entry for an unslid cache address."),
+ 	   &cmdlist);

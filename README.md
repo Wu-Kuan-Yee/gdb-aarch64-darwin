@@ -209,8 +209,11 @@ pin deliberately as described in `patches/README.md`.
   registers, and follows compact-unwind frame records (both FRAME and
   FRAMELESS modes).  Line numbers are still unavailable, and a FRAMELESS
   frame is unwound by decoding its prologue from the function entry,
-  tracking SP adjustments and where x30 is stored.  When even that finds
-  no saved LR (a pure leaf or tail call), the backtrace stops.  `set
+  tracking SP adjustments and where x30 is stored.  Compilers emit
+  FRAMELESS only for leaves/tail calls (they use DWARF mode when the LR is
+  saved), so in practice these frames have no saved LR and the backtrace
+  stops; the analyzer covers hand-written assembly with compact-unwind
+  directives.  Frame-mode user code keeps its DWARF unwinder.  `set
   darwin-unwind-stack-scan on` additionally enables a heuristic scan; it
   can invent frames, so it is off by default.
 - Type-erased libc++ types (`std::function`, `std::any`) have no printable
