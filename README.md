@@ -37,6 +37,7 @@ The smoke test in `tests/` exercises these on every build:
 | C++ pretty printing | libc++ (`std::__1`) printers for string/string_view (all character widths), array, span, vector and vector<bool>, deque, list, forward_list, map/set and their multi variants, unordered containers, stack/queue/priority_queue, bitset, valarray, pair, tuple, optional, variant, unique/shared/weak_ptr, complex, chrono, initializer_list, atomic, filesystem::path and reference_wrapper are loaded automatically |
 | Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
 | Core files | `gcore` writes native Mach-O cores with `main bin spec` and `all image infos` notes; GDB reloads the executable, lists every user library in `info sharedlibrary` and reads it through its own `darwin-core` target |
+| dSYM lookup | `<binary>.dSYM` is found by UUID and loaded automatically, so stripped user binaries keep source line information |
 | Shared cache | `darwin-shared-cache` and `darwin-shared-symbol` parse the dyld shared cache, its subcaches and export tries; export names of every loaded cache image are loaded as minimal symbols by default, so `break printf`, `break CFRelease` and `break dispatch_async` resolve and `bt` names system-library frames |
 | `info proc mappings` | works, including per-region file names |
 | Catchpoints on system functions (`catch throw`, `catch syscall`) | limited: the system libraries live in the dyld shared cache and expose no symbols |

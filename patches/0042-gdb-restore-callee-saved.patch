@@ -1,0 +1,40 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 8a0adc212d1..1e67c851a20 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -4530,6 +4530,35 @@ darwin_cu_sniffer (const struct frame_unwind *self,
+   cache->saved_regs[AARCH64_FP_REGNUM].set_value (prev_fp);
+   cache->saved_regs[AARCH64_SP_REGNUM].set_value (prev_sp);
+   cache->saved_regs[AARCH64_PC_REGNUM].set_value (lr);
++
++  if (mode == 4)
++    {
++      /* Callee-saved pairs live below the frame record, as in LLDB's
++	 compact-unwind decoder.  */
++      static const struct
++      {
++	uint32_t bit;
++	int first;
++	int second;
++      } pairs[] = {
++	{0x001, 19, 20}, {0x002, 21, 22}, {0x004, 23, 24},
++	{0x008, 25, 26}, {0x010, 27, 28},
++	{0x020, AARCH64_V0_REGNUM + 8, AARCH64_V0_REGNUM + 9},
++	{0x040, AARCH64_V0_REGNUM + 10, AARCH64_V0_REGNUM + 11},
++	{0x080, AARCH64_V0_REGNUM + 12, AARCH64_V0_REGNUM + 13},
++	{0x100, AARCH64_V0_REGNUM + 14, AARCH64_V0_REGNUM + 15}
++      };
++      int pair_index = 1;
++      for (const auto &pair : pairs)
++	if ((encoding & pair.bit) != 0)
++	  {
++	    CORE_ADDR off = -(pair_index * 16) - 8;
++	    cache->saved_regs[pair.first].set_addr (fp + 16 + off);
++	    cache->saved_regs[pair.second].set_addr (fp + 16 + off - 8);
++	    pair_index++;
++	  }
++    }
++
+   *this_cache = cache;
+   return 1;
+ }

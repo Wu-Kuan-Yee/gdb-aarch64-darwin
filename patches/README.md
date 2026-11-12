@@ -48,6 +48,8 @@ revision and are applied in the order listed in `series` with
 | `0039` | `gdb/darwin-nat.c` | Decode the arm64 prologue of a FRAMELESS frame (SP moves and x30 stores) to recover caller PC/SP deterministically |
 | `0040` | `gdb/darwin-nat.c` | Read `__TEXT.__unwind_info` from any Mach-O objfile, not just the shared cache; the diagnostic falls back to it |
 | `0041` | `gdb/darwin-nat.c` | Generate cache symbols for every dyld image the process actually loaded, not just an allowlist |
+| `0042` | `gdb/darwin-nat.c` | Restore callee-saved x19-x28/d8-d15 from compact-unwind FRAME records |
+| `0043` | `gdb/darwin-nat.c` | Find `<binary>.dSYM` by Mach-O UUID and load it as a separate debug objfile |
 
 
 ## Applying with a three-way merge

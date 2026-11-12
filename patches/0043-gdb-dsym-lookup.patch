@@ -1,0 +1,114 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 1e67c851a20..5c677d7480f 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -51,8 +51,10 @@
+ #include "bfd.h"
+ #include "bfd/mach-o.h"
+ #include "gdbarch.h"
++#include "observable.h"
+ 
+ static void darwin_install_cu_unwinder ();
++static void darwin_dsym_new_objfile (struct objfile &);
+ 
+ #include <copyfile.h>
+ #include <sys/ptrace.h>
+@@ -5025,8 +5027,98 @@ darwin_shcache_load_symbols ()
+   unlink (path);
+ }
+ 
++
++/* Read LC_UUID from a Mach-O BFD.  */
++
++static bool
++darwin_macho_uuid (bfd *abfd, uint8_t uuid[16])
++{
++  gdb_byte hdr[32];
++  if (bfd_seek (abfd, 0, SEEK_SET) != 0
++      || bfd_read (hdr, sizeof (hdr), abfd) != (int) sizeof (hdr)
++      || dsc_u32 (hdr) != 0xfeedfacf)
++    return false;
++
++  uint32_t ncmds = dsc_u32 (hdr + 16);
++  uint32_t sizeofcmds = dsc_u32 (hdr + 20);
++  if (sizeofcmds > (1u << 20))
++    return false;
++  std::vector<gdb_byte> cmds (sizeofcmds);
++  if (sizeofcmds != 0
++      && (bfd_seek (abfd, 32, SEEK_SET) != 0
++	  || bfd_read (cmds.data (), sizeofcmds, abfd) != (int) sizeofcmds))
++    return false;
++
++  size_t off = 0;
++  for (uint32_t i = 0; i < ncmds && off + 8 <= cmds.size (); i++)
++    {
++      uint32_t cmd = dsc_u32 (&cmds[off]);
++      uint32_t size = dsc_u32 (&cmds[off + 4]);
++      if (size < 8 || off + size > cmds.size ())
++	break;
++      if (cmd == 0x1b && size >= 24)
++	{
++	  memcpy (uuid, &cmds[off + 8], 16);
++	  return true;
++	}
++      off += size;
++    }
++  return false;
++}
++
++/* Look for <binary>.dSYM/Contents/Resources/DWARF/<binary> and load it
++   when its UUID matches.  */
++
++static void
++darwin_dsym_new_objfile (struct objfile &objfile_ref)
++{
++  struct objfile *objfile = &objfile_ref;
++  if (objfile == nullptr || objfile->separate_debug_objfile_backlink != nullptr
++      || objfile->separate_debug_objfile != nullptr)
++    return;
++
++  const char *name = objfile_name (objfile);
++  if (name == nullptr || strstr (name, ".dSYM/") != nullptr)
++    return;
++
++  bfd *abfd = objfile->obfd.get ();
++  if (abfd == nullptr || bfd_get_section_by_name (abfd, ".debug_info") != nullptr)
++    return;
++
++  uint8_t uuid[16];
++  if (!darwin_macho_uuid (abfd, uuid))
++    return;
++
++  std::string path (name);
++  const char *slash = strrchr (name, '/');
++  std::string base = slash != nullptr ? slash + 1 : name;
++  std::string dsym = path + ".dSYM/Contents/Resources/DWARF/" + base;
++  if (access (dsym.c_str (), R_OK) != 0)
++    return;
++
++  gdb_bfd_ref_ptr dbfd = gdb_bfd_open (dsym.c_str (), nullptr, -1);
++  if (dbfd == nullptr)
++    return;
++  uint8_t duuid[16];
++  if (!darwin_macho_uuid (dbfd.get (), duuid)
++      || memcmp (uuid, duuid, sizeof (uuid)) != 0)
++    return;
++
++  try
++    {
++      symbol_file_add_separate (dbfd, dsym.c_str (), (symfile_add_flags) 0,
++				objfile);
++    }
++  catch (const gdb_exception_error &)
++    {
++    }
++}
++
++
+ INIT_GDB_FILE (darwin_nat)
+ {
++  gdb::observers::new_objfile.attach (darwin_dsym_new_objfile,
++				      "darwin-dsym");
+   kern_return_t kret;
+ 
+   gdb_task = mach_task_self ();

@@ -39,3 +39,5 @@
 0039-gdb-frameless-prologue-analysis.patch
 0040-gdb-objfile-compact-unwind.patch
 0041-gdb-load-all-loaded-cache-exports.patch
+0042-gdb-restore-callee-saved.patch
+0043-gdb-dsym-lookup.patch
