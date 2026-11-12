@@ -1,0 +1,45 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index e0b4e83e7fc..8a0adc212d1 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -4850,19 +4850,33 @@ darwin_shcache_load_symbols ()
+     nullptr
+   };
+ 
++  /* Prefer the images this process actually loaded; a core or a live
++     process usually maps a few hundred of the cache's 4000+ images.  */
++  std::vector<std::pair<CORE_ADDR, std::string>> loaded;
++  darwin_solib_get_all_images (loaded);
++  std::set<std::string> loaded_paths;
++  for (const auto &image : loaded)
++    loaded_paths.insert (image.second);
++
+   uint64_t slide = darwin_shcache_slide (state);
+ 
+   std::vector<std::pair<std::string, uint64_t>> symbols;
+   std::set<std::string> seen;
+   for (const auto &img : state.images)
+     {
+-      bool wanted = false;
+-      for (int i = 0; allowed[i] != nullptr; i++)
+-	if (img.second.find (allowed[i]) != std::string::npos)
+-	  {
+-	    wanted = true;
+-	    break;
+-	  }
++      bool wanted;
++      if (loaded_paths.empty ())
++	{
++	  wanted = false;
++	  for (int i = 0; allowed[i] != nullptr; i++)
++	    if (img.second.find (allowed[i]) != std::string::npos)
++	      {
++		wanted = true;
++		break;
++	      }
++	}
++      else
++	wanted = loaded_paths.count (img.second) != 0;
+       if (!wanted)
+ 	continue;
+ 
