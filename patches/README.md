@@ -52,6 +52,8 @@ revision and are applied in the order listed in `series` with
 | `0043` | `gdb/darwin-nat.c` | Find `<binary>.dSYM` by Mach-O UUID and load it as a separate debug objfile |
 | `0044` | `gdb/darwin-nat.c` | `darwin-shared-unwind-scan`: count compact-unwind modes across loaded cache images |
 | `0045` | `gdb/darwin-nat.c` | Inject loaded images' `__eh_frame` sections into a synthetic Mach-O so GDB's DWARF CFI covers compact-unwind mode 3 |
+| `0046` | `gdb/darwin-nat.c` | Let `darwin-shared-unwind-scan` report every mode-3 entry |
+| `0047` | `gdb/eval.c` | Fall back to `objc_msgSend` when `objc_msgSend_stret` is absent, so Objective-C message sends evaluate on arm64 |
 
 
 ## Applying with a three-way merge

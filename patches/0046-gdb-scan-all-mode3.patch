@@ -1,0 +1,13 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 31a01993415..3685835014b 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -4724,7 +4724,7 @@ darwin_shared_unwind_scan_command (const char *args, int from_tty)
+ 	      if (mode >= 16)
+ 		continue;
+ 	      counts[mode]++;
+-	      if (mode == 3 && shown < 12)
++	      if (mode == 3 && shown < 100)
+ 		{
+ 		  gdb_printf (_("mode3 %s func=%s enc=0x%x\n"),
+ 			      img.second.c_str (),

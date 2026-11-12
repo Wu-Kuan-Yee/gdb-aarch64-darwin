@@ -1,0 +1,26 @@
+diff --git a/gdb/eval.c b/gdb/eval.c
+index c784ef686f0..ea6bb2a9e2a 100644
+--- a/gdb/eval.c
++++ b/gdb/eval.c
+@@ -2035,9 +2035,18 @@ objc_msgcall_operation::evaluate (struct type *expect_type,
+   else
+     {
+       msg_send = find_function_in_inferior ("objc_msgSend", NULL);
+-      /* Special dispatcher for methods returning structs.  */
+-      msg_send_stret
+-	= find_function_in_inferior ("objc_msgSend_stret", NULL);
++      /* Special dispatcher for methods returning structs.  arm64 has no
++	 objc_msgSend_stret; the normal dispatcher handles struct returns
++	 there.  */
++      try
++	{
++	  msg_send_stret
++	    = find_function_in_inferior ("objc_msgSend_stret", NULL);
++	}
++      catch (const gdb_exception_error &)
++	{
++	  msg_send_stret = msg_send;
++	}
+     }
+ 
+   /* Verify the target object responds to this method.  The
