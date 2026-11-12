@@ -33,7 +33,7 @@ The smoke test in `tests/` exercises these on every build:
 | Backtraces across signal handlers | works |
 | `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
 | C++ types, virtual dispatch, method arguments | works |
-| Rust | struct/enum/tuple/slice printing plus `Vec`, `String`, `Rc`, `Arc`, `HashMap`, `HashSet`, `BTreeMap` and `BTreeSet` pretty printers |
+| Rust | struct/enum/tuple/slice printing plus `Vec`, `String`, `Rc`, `Arc`, `HashMap`, `HashSet`, `BTreeMap`/`BTreeSet` and common iterator/range/Chars pretty printers |
 | Ada | verified with GNAT 16.2 arm64: breakpoints, records, arrays and backtraces |
 | Objective-C | `[obj method]` evaluates through `objc_msgSend`; `po`/`pclass`; `print` automatically shows runtime class plus `-description` for object pointers (`set print objc-description off` disables it) |
 | Python scripting | works when a Python with development headers is installed, or in the portable build; can also be linked statically with its runtime bundled (see docs/EMBEDDED.md) |

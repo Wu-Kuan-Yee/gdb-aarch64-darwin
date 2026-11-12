@@ -44,6 +44,34 @@ class VecPrinter:
             yield "[%d]" % i, (data + i).dereference()
 
 
+
+_HOST_UTF8 = None
+
+
+def _quote_text(text):
+    global _HOST_UTF8
+    if any(ord(c) > 127 for c in text):
+        if _HOST_UTF8 is None:
+            try:
+                shown = gdb.execute("show host-charset", to_string=True)
+            except gdb.error:
+                shown = ""
+            _HOST_UTF8 = "UTF-8" in shown.upper() or "UTF8" in shown.upper()
+    parts = []
+    for c in text:
+        if c == "\\":
+            parts.append("\\\\")
+        elif c == '"':
+            parts.append('\\"')
+        elif ord(c) > 127 and not _HOST_UTF8:
+            code = ord(c)
+            parts.append("\\u%04x" % code if code <= 0xffff
+                         else "\\U%08x" % code)
+        else:
+            parts.append(c)
+    return '"%s"' % "".join(parts)
+
+
 class StringPrinter:
     def __init__(self, val):
         self.val = val
@@ -52,7 +80,7 @@ class StringPrinter:
         try:
             ptr, length = _vec_parts(self.val["vec"])
             text = _read_bytes(ptr, length).decode("utf-8", errors="replace")
-            return '"%s"' % text.replace("\\", "\\\\").replace('"', '\\"')
+            return _quote_text(text)
         except (gdb.error, RuntimeError):
             return None
 
@@ -273,6 +301,118 @@ class BTreeSetPrinter:
             return
 
 
+
+class SliceIterPrinter:
+    def __init__(self, val):
+        self.val = val
+
+    def _parts(self):
+        elem = self.val.type.template_argument(0)
+        ptr = _field(self.val, "ptr")
+        if ptr.type.code == gdb.TYPE_CODE_STRUCT:
+            ptr = _field(ptr, "pointer")
+        end = _field(self.val, "end_or_len")
+        if elem.sizeof == 0:
+            return elem, ptr, int(end), True
+        return elem, ptr, (int(end) - int(ptr)) // elem.sizeof, False
+
+    def to_string(self):
+        try:
+            elem, _, count, zst = self._parts()
+            return "Iter<%s> of length %d" % (elem, count)
+        except (gdb.error, RuntimeError):
+            return "Iter"
+
+    def children(self):
+        try:
+            elem, ptr, count, zst = self._parts()
+            if zst:
+                return
+            data = ptr.cast(elem.pointer())
+            for i in range(count):
+                yield "[%d]" % i, (data + i).dereference()
+        except (gdb.error, RuntimeError):
+            return
+
+
+class VecIntoIterPrinter:
+    def __init__(self, val):
+        self.val = val
+
+    def _parts(self):
+        elem = self.val.type.template_argument(0)
+        ptr = _field(self.val, "ptr")
+        if ptr.type.code == gdb.TYPE_CODE_STRUCT:
+            ptr = _field(ptr, "pointer")
+        end = _field(self.val, "end")
+        return elem, ptr, (int(end) - int(ptr)) // elem.sizeof
+
+    def to_string(self):
+        try:
+            elem, _, count = self._parts()
+            return "IntoIter<%s> of length %d" % (elem, count)
+        except (gdb.error, RuntimeError):
+            return "IntoIter"
+
+    def children(self):
+        try:
+            elem, ptr, count = self._parts()
+            data = ptr.cast(elem.pointer())
+            for i in range(count):
+                yield "[%d]" % i, (data + i).dereference()
+        except (gdb.error, RuntimeError):
+            return
+
+
+class RangePrinter:
+    def __init__(self, val, kind):
+        self.val = val
+        self.kind = kind
+
+    def to_string(self):
+        try:
+            if self.kind == "range":
+                return "%s..%s" % (self.val["start"], self.val["end"])
+            if self.kind == "range_inclusive":
+                return "%s..=%s" % (self.val["start"], self.val["end"])
+            if self.kind == "range_from":
+                return "%s.." % self.val["start"]
+            if self.kind == "range_to":
+                return "..%s" % self.val["end"]
+        except gdb.error:
+            pass
+        return self.kind
+
+
+class CharsPrinter:
+    def __init__(self, val):
+        self.val = val
+
+    def _bytes(self):
+        it = _field(self.val, "iter")
+        ptr = _field(it, "ptr")
+        if ptr.type.code == gdb.TYPE_CODE_STRUCT:
+            ptr = _field(ptr, "pointer")
+        end = int(_field(it, "end_or_len"))
+        start = int(ptr)
+        if end <= start:
+            return b""
+        return gdb.selected_inferior().read_memory(start, end - start).tobytes()
+
+    def to_string(self):
+        try:
+            text = self._bytes().decode("utf-8", errors="replace")
+            return 'Chars(%s)' % _quote_text(text)
+        except (gdb.error, RuntimeError):
+            return "Chars"
+
+
+
+
+def _range_printer(kind):
+    return lambda val: RangePrinter(val, kind)
+
+
 def _make_printers():
     pp = gdb.printing.RegexpCollectionPrettyPrinter("librust")
     pp.add_printer("vec", r"^alloc::vec::Vec<.*>$", VecPrinter)
@@ -293,6 +433,21 @@ def _make_printers():
     pp.add_printer("btreeset",
                    r"^alloc::collections::btree::set::BTreeSet<.*>$",
                    BTreeSetPrinter)
+    pp.add_printer("slice_iter", r"^core::slice::iter::Iter<.*>$",
+                   SliceIterPrinter)
+    pp.add_printer("vec_into_iter",
+                   r"^alloc::vec::into_iter::IntoIter<.*>$",
+                   VecIntoIterPrinter)
+    pp.add_printer("range", r"^core::ops::range::Range<.*>$",
+                   _range_printer("range"))
+    pp.add_printer("range_inclusive",
+                   r"^core::ops::range::RangeInclusive<.*>$",
+                   _range_printer("range_inclusive"))
+    pp.add_printer("range_from", r"^core::ops::range::RangeFrom<.*>$",
+                   _range_printer("range_from"))
+    pp.add_printer("range_to", r"^core::ops::range::RangeTo<.*>$",
+                   _range_printer("range_to"))
+    pp.add_printer("chars", r"^core::str::iter::Chars$", CharsPrinter)
     return pp
 
 
