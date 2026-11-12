@@ -45,3 +45,4 @@
 0045-gdb-inject-cache-eh-frame.patch
 0046-gdb-scan-all-mode3.patch
 0047-gdb-objc-msgsend-arm64.patch
+0048-gdb-objc-po-command.patch
