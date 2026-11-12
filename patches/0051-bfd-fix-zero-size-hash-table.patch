@@ -1,0 +1,17 @@
+diff --git a/bfd/hash.c b/bfd/hash.c
+index a53f7d7925a..a1db5d1b65c 100644
+--- a/bfd/hash.c
++++ b/bfd/hash.c
+@@ -430,6 +430,12 @@ bfd_hash_table_init_n (struct bfd_hash_table *table,
+ {
+   unsigned long alloc;
+ 
++  /* A zero size would leave a zero-length bucket array and make the
++     first bfd_hash_lookup write out of bounds.  GNAT archive members can
++     produce an OSO with no symbols, which reached this path.  */
++  if (size == 0)
++    size = bfd_default_hash_table_size;
++
+   alloc = size;
+   alloc *= sizeof (struct bfd_hash_entry *);
+   if (alloc / sizeof (struct bfd_hash_entry *) != size)

@@ -57,6 +57,7 @@ revision and are applied in the order listed in `series` with
 | `0048` | `gdb/python/lib/gdb/libobjc.py` | `po` and `pclass` commands for Objective-C object descriptions |
 | `0049` | `gdb/python/lib/gdb/librust.py` | Rust pretty printers for `Vec`, `String`, `Rc` and `Arc` |
 | `0050` | `gdb/python/lib/gdb/librust.py` | Rust `HashMap`/`HashSet` printers via hashbrown's reverse bucket layout |
+| `0051` | `bfd/hash.c` | Do not create zero-length BFD hash tables; fixes a crash when GNAT archive OSOs have no symbols |
 
 
 ## Applying with a three-way merge
