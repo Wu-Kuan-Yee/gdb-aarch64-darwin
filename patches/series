@@ -41,3 +41,5 @@
 0041-gdb-load-all-loaded-cache-exports.patch
 0042-gdb-restore-callee-saved.patch
 0043-gdb-dsym-lookup.patch
+0044-gdb-scan-compact-unwind-modes.patch
+0045-gdb-inject-cache-eh-frame.patch

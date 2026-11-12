@@ -207,8 +207,9 @@ pin deliberately as described in `patches/README.md`.
 - The dyld shared cache has no local symbols on a release macOS, only
   export names and compact unwind tables.  GDB names system-library
   functions, sets breakpoints there through the hardware breakpoint
-  registers, and follows compact-unwind frame records (both FRAME and
-  FRAMELESS modes).  Line numbers are still unavailable, and a FRAMELESS
+  registers, follows compact-unwind FRAME and FRAMELESS records, and loads
+  the cache images' `__eh_frame` sections so DWARF-mode records can use
+  GDB's CFI.  Line numbers are still unavailable, and a FRAMELESS
   frame is unwound by decoding its prologue from the function entry,
   tracking SP adjustments and where x30 is stored.  Compilers emit
   FRAMELESS only for leaves/tail calls (they use DWARF mode when the LR is

@@ -1,0 +1,132 @@
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index 5c677d7480f..7608abdd30b 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -4631,6 +4631,115 @@ darwin_install_cu_unwinder ()
+ }
+ 
+ 
++
++static void
++darwin_shared_unwind_scan_command (const char *args, int from_tty)
++{
++  darwin_dsc_state state;
++  std::string base
++    = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/"
++      "dyld_shared_cache_arm64e";
++  if (access (base.c_str (), R_OK) != 0)
++    base = "/System/Library/dyld/dyld_shared_cache_arm64e";
++  darwin_dsc_parse (base, state, 0);
++  if (state.files.empty ())
++    error (_("cannot read the dyld shared cache"));
++
++  uint64_t slide = darwin_shcache_slide (state);
++  std::vector<std::pair<CORE_ADDR, std::string>> loaded;
++  darwin_solib_get_all_images (loaded);
++  std::set<std::string> loaded_paths;
++  for (const auto &image : loaded)
++    loaded_paths.insert (image.second);
++
++  uint64_t counts[16] = {};
++  int shown = 0;
++  for (const auto &img : state.images)
++    {
++      if (!loaded_paths.empty ()
++	  && loaded_paths.count (img.second) == 0)
++	continue;
++
++      uint64_t sec_addr = 0, sec_size = 0;
++      if (!darwin_dsc_find_unwind_section (state, img.first, slide,
++					   &sec_addr, &sec_size)
++	  || sec_size < 32 || sec_size > (16u << 20))
++	continue;
++      std::vector<gdb_byte> data (sec_size);
++      if (target_read_memory (sec_addr + slide, data.data (), sec_size) != 0)
++	continue;
++
++      uint32_t common_off = dsc_u32 (&data[4]);
++      uint32_t common_count = dsc_u32 (&data[8]);
++      uint32_t index_off = dsc_u32 (&data[20]);
++      uint32_t index_count = dsc_u32 (&data[24]);
++      if (index_off + index_count * 12u > data.size ())
++	continue;
++
++      for (uint32_t i = 0; i < index_count; i++)
++	{
++	  const gdb_byte *e = &data[index_off + i * 12];
++	  uint32_t index = dsc_u32 (e);
++	  uint32_t second = dsc_u32 (e + 4);
++	  if (second == 0 || second >= data.size ())
++	    continue;
++	  uint32_t kind = dsc_u32 (&data[second]);
++	  if (kind != 2 && kind != 3)
++	    continue;
++
++	  uint32_t entry_off = second + ((uint32_t) data[second + 4]
++					| ((uint32_t) data[second + 5] << 8));
++	  uint32_t entry_count = data[second + 6] | (data[second + 7] << 8);
++	  uint32_t enc_off = 0, enc_count = 0;
++	  if (kind == 3)
++	    {
++	      enc_off = second + ((uint32_t) data[second + 8]
++				  | ((uint32_t) data[second + 9] << 8));
++	      enc_count = data[second + 10] | (data[second + 11] << 8);
++	    }
++
++	  for (uint32_t k = 0; k < entry_count; k++)
++	    {
++	      uint32_t f, enc;
++	      if (kind == 2)
++		{
++		  f = dsc_u32 (&data[entry_off + k * 8]);
++		  enc = dsc_u32 (&data[entry_off + k * 8 + 4]);
++		}
++	      else
++		{
++		  uint32_t entry = dsc_u32 (&data[entry_off + k * 4]);
++		  f = entry & 0x00ffffff;
++		  uint32_t ei = (entry >> 24) & 0xff;
++		  if (ei < common_count)
++		    enc = dsc_u32 (&data[common_off + ei * 4]);
++		  else if (ei - common_count < enc_count)
++		    enc = dsc_u32 (&data[enc_off + (ei - common_count) * 4]);
++		  else
++		    continue;
++		}
++	      uint32_t mode = (enc >> 24) & 0xf;
++	      if (mode >= 16)
++		continue;
++	      counts[mode]++;
++	      if (mode == 3 && shown < 12)
++		{
++		  gdb_printf (_("mode3 %s func=%s enc=0x%x\n"),
++			      img.second.c_str (),
++			      hex_string (img.first + index + f), enc);
++		  shown++;
++		}
++	    }
++	}
++    }
++
++  gdb_printf (_("compact modes: frame=%llu frameless=%llu dwarf=%llu none=%llu\n"),
++	      (unsigned long long) counts[4],
++	      (unsigned long long) counts[2],
++	      (unsigned long long) counts[3],
++	      (unsigned long long) counts[0]);
++}
++
+ static void
+ darwin_shared_unwind_command (const char *args, int from_tty)
+ {
+@@ -5169,6 +5278,11 @@ Show whether shared-cache export names are loaded as minimal symbols."), NULL,
+ Usage: darwin-shared-symbol NAME [PATH-FILTER]"),
+ 	   &cmdlist);
+ 
++  add_cmd ("darwin-shared-unwind-scan", class_info,
++	   darwin_shared_unwind_scan_command,
++	   _("Scan compact unwind modes of loaded cache images."),
++	   &cmdlist);
++
+   add_cmd ("darwin-analyze-frameless", class_info,
+ 	   darwin_analyze_frameless_command,
+ 	   _("Run the FRAMELESS prologue analyzer on a function."),

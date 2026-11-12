@@ -50,6 +50,8 @@ revision and are applied in the order listed in `series` with
 | `0041` | `gdb/darwin-nat.c` | Generate cache symbols for every dyld image the process actually loaded, not just an allowlist |
 | `0042` | `gdb/darwin-nat.c` | Restore callee-saved x19-x28/d8-d15 from compact-unwind FRAME records |
 | `0043` | `gdb/darwin-nat.c` | Find `<binary>.dSYM` by Mach-O UUID and load it as a separate debug objfile |
+| `0044` | `gdb/darwin-nat.c` | `darwin-shared-unwind-scan`: count compact-unwind modes across loaded cache images |
+| `0045` | `gdb/darwin-nat.c` | Inject loaded images' `__eh_frame` sections into a synthetic Mach-O so GDB's DWARF CFI covers compact-unwind mode 3 |
 
 
 ## Applying with a three-way merge
