@@ -46,3 +46,4 @@
 0046-gdb-scan-all-mode3.patch
 0047-gdb-objc-msgsend-arm64.patch
 0048-gdb-objc-po-command.patch
+0049-gdb-rust-printers.patch

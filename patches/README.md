@@ -55,6 +55,7 @@ revision and are applied in the order listed in `series` with
 | `0046` | `gdb/darwin-nat.c` | Let `darwin-shared-unwind-scan` report every mode-3 entry |
 | `0047` | `gdb/eval.c` | Fall back to `objc_msgSend` when `objc_msgSend_stret` is absent, so Objective-C message sends evaluate on arm64 |
 | `0048` | `gdb/python/lib/gdb/libobjc.py` | `po` and `pclass` commands for Objective-C object descriptions |
+| `0049` | `gdb/python/lib/gdb/librust.py` | Rust pretty printers for `Vec`, `String`, `Rc` and `Arc` |
 
 
 ## Applying with a three-way merge
