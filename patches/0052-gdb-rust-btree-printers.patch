@@ -1,0 +1,136 @@
+diff --git a/gdb/python/lib/gdb/librust.py b/gdb/python/lib/gdb/librust.py
+index aced197f893..f0938f56611 100644
+--- a/gdb/python/lib/gdb/librust.py
++++ b/gdb/python/lib/gdb/librust.py
+@@ -161,6 +161,118 @@ class HashSetPrinter:
+             return
+ 
+ 
++
++def _uninit(value):
++    """Unwrap MaybeUninit<T> { value: ManuallyDrop<T> { value: T } }."""
++    try:
++        return value["value"]["value"]
++    except gdb.error:
++        return value
++
++
++class BTreeMapPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        return "BTreeMap with %d elements" % int(self.val["length"])
++
++    def _types(self):
++        key = self.val.type.template_argument(0)
++        value = self.val.type.template_argument(1)
++        leaf = gdb.lookup_type(
++            "alloc::collections::btree::node::LeafNode<%s, %s>"
++            % (key, value))
++        internal = gdb.lookup_type(
++            "alloc::collections::btree::node::InternalNode<%s, %s>"
++            % (key, value))
++        return leaf, internal
++
++    def _walk(self, ptr, height, leaf_t, internal_t, depth=0):
++        if depth > 32:
++            return
++        if height == 0:
++            leaf = ptr.cast(leaf_t.pointer()).dereference()
++            count = int(leaf["len"])
++            for i in range(count):
++                yield (_uninit(leaf["keys"][i]),
++                        _uninit(leaf["vals"][i]))
++            return
++
++        node = ptr.cast(internal_t.pointer()).dereference()
++        data = node["data"]
++        count = int(data["len"])
++        edges = node["edges"]
++        for i in range(count):
++            child = _uninit(edges[i])["pointer"]
++            yield from self._walk(child, height - 1, leaf_t, internal_t,
++                                  depth + 1)
++            yield (_uninit(data["keys"][i]), _uninit(data["vals"][i]))
++        child = _uninit(edges[count])["pointer"]
++        yield from self._walk(child, height - 1, leaf_t, internal_t, depth + 1)
++
++    def children(self):
++        if int(self.val["length"]) == 0:
++            return
++        try:
++            leaf_t, internal_t = self._types()
++            root = _uninit(self.val["root"]["Some"]["__0"])
++            ptr = root["node"]["pointer"]
++            for key, value in self._walk(ptr, int(root["height"]),
++                                         leaf_t, internal_t):
++                yield str(key), value
++        except (gdb.error, RuntimeError):
++            return
++
++
++class BTreeSetPrinter:
++    def __init__(self, val):
++        self.val = val
++
++    def to_string(self):
++        return "BTreeSet with %d elements" % int(self.val["map"]["length"])
++
++    def _walk(self, ptr, height, leaf_t, internal_t, depth=0):
++        if depth > 32:
++            return
++        if height == 0:
++            leaf = ptr.cast(leaf_t.pointer()).dereference()
++            for i in range(int(leaf["len"])):
++                yield _uninit(leaf["keys"][i])
++            return
++        node = ptr.cast(internal_t.pointer()).dereference()
++        data = node["data"]
++        count = int(data["len"])
++        edges = node["edges"]
++        for i in range(count):
++            yield from self._walk(_uninit(edges[i])["pointer"], height - 1,
++                                  leaf_t, internal_t, depth + 1)
++            yield _uninit(data["keys"][i])
++        yield from self._walk(_uninit(edges[count])["pointer"], height - 1,
++                              leaf_t, internal_t, depth + 1)
++
++    def children(self):
++        try:
++            m = self.val["map"]
++            key = m.type.template_argument(0)
++            value = m.type.template_argument(1)
++            leaf_t = gdb.lookup_type(
++                "alloc::collections::btree::node::LeafNode<%s, %s>"
++                % (key, value))
++            internal_t = gdb.lookup_type(
++                "alloc::collections::btree::node::InternalNode<%s, %s>"
++                % (key, value))
++            root = _uninit(m["root"]["Some"]["__0"])
++            index = 0
++            for key_value in self._walk(root["node"]["pointer"],
++                                        int(root["height"]),
++                                        leaf_t, internal_t):
++                yield "[%d]" % index, key_value
++                index += 1
++        except (gdb.error, RuntimeError):
++            return
++
++
+ def _make_printers():
+     pp = gdb.printing.RegexpCollectionPrettyPrinter("librust")
+     pp.add_printer("vec", r"^alloc::vec::Vec<.*>$", VecPrinter)
+@@ -175,6 +287,12 @@ def _make_printers():
+     pp.add_printer("hashset",
+                    r"^std::collections::hash::set::HashSet<.*>$",
+                    HashSetPrinter)
++    pp.add_printer("btreemap",
++                   r"^alloc::collections::btree::map::BTreeMap<.*>$",
++                   BTreeMapPrinter)
++    pp.add_printer("btreeset",
++                   r"^alloc::collections::btree::set::BTreeSet<.*>$",
++                   BTreeSetPrinter)
+     return pp
+ 
+ 

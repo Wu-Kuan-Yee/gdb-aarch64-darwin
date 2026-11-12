@@ -49,3 +49,5 @@
 0049-gdb-rust-printers.patch
 0050-gdb-rust-hash-printers.patch
 0051-bfd-fix-zero-size-hash-table.patch
+0052-gdb-rust-btree-printers.patch
+0053-gdb-objc-description-summary.patch

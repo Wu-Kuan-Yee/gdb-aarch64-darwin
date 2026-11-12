@@ -58,6 +58,8 @@ revision and are applied in the order listed in `series` with
 | `0049` | `gdb/python/lib/gdb/librust.py` | Rust pretty printers for `Vec`, `String`, `Rc` and `Arc` |
 | `0050` | `gdb/python/lib/gdb/librust.py` | Rust `HashMap`/`HashSet` printers via hashbrown's reverse bucket layout |
 | `0051` | `bfd/hash.c` | Do not create zero-length BFD hash tables; fixes a crash when GNAT archive OSOs have no symbols |
+| `0052` | `gdb/python/lib/gdb/librust.py` | Rust `BTreeMap`/`BTreeSet` printers (leaf/internal node traversal) |
+| `0053` | `gdb/python/lib/gdb/libobjc.py` | Automatic Objective-C object summaries: runtime class plus `-description`, with a `print objc-description` setting |
 
 
 ## Applying with a three-way merge

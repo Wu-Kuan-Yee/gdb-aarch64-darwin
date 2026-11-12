@@ -33,9 +33,9 @@ The smoke test in `tests/` exercises these on every build:
 | Backtraces across signal handlers | works |
 | `gdb -p PID` attach and detach | works; see [docs/SIGNING.md](docs/SIGNING.md) for hardened targets |
 | C++ types, virtual dispatch, method arguments | works |
-| Rust | struct/enum/tuple/slice printing plus `Vec`, `String`, `Rc`, `Arc`, `HashMap` and `HashSet` pretty printers |
+| Rust | struct/enum/tuple/slice printing plus `Vec`, `String`, `Rc`, `Arc`, `HashMap`, `HashSet`, `BTreeMap` and `BTreeSet` pretty printers |
 | Ada | verified with GNAT 16.2 arm64: breakpoints, records, arrays and backtraces |
-| Objective-C | `[obj method]` evaluates through `objc_msgSend`; `po` prints `-description` and `pclass` prints the runtime class name |
+| Objective-C | `[obj method]` evaluates through `objc_msgSend`; `po`/`pclass`; `print` automatically shows runtime class plus `-description` for object pointers (`set print objc-description off` disables it) |
 | Python scripting | works when a Python with development headers is installed, or in the portable build; can also be linked statically with its runtime bundled (see docs/EMBEDDED.md) |
 | C++ pretty printing | libc++ (`std::__1`) printers for string/string_view (all character widths), array, span, vector and vector<bool>, deque, list, forward_list, map/set and their multi variants, unordered containers, stack/queue/priority_queue, bitset, valarray, pair, tuple, optional, variant, unique/shared/weak_ptr, complex, chrono, initializer_list, atomic, filesystem::path and reference_wrapper are loaded automatically |
 | Early `dlopen` | a helper reports the first image added by dyld, so pending breakpoints bind before a constructor calls into the library |
